@@ -1,0 +1,43 @@
+'interfaces': {
+    <interface-type>: {
+        'kind': <kind-resp>,
+        'count': <total>,
+        'items': {
+            <hardwareID-resp>: {
+                'descr': <interfaceDesc>,
+                'managementOnly': <val>,
+                'name': <val>,
+                'securityLevel': <val>,
+                'shutdown': <val>,
+                // Only if interface type = vlan:
+                'vlanID': <val>,
+                'ipv4': {
+                    'addr': <val>,
+                    'mask': <val>,
+                    'kind': <val>
+                },
+            }
+        }
+    }
+}
+
+'routes': {
+    'static': {
+        'kind': <kind-resp>,
+        'count': <total>,
+        'items': {
+            'ipv4': {
+                network-val: {
+                    'netkind': <val>,
+                    'gateway': <val>,
+                    'ad': <val>,
+                    'interface': <val>,
+                    'tracked': <val>,
+                    'tunneled': <val>,
+                    'objectId': <val>
+                }
+            }
+        }
+    }
+}
+
