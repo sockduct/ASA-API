@@ -41,3 +41,15 @@
     }
 }
 
+'prefixes': {
+    'ipv4': {
+        'count': <total>,
+        'items': {
+            <prefix>/<len>: {
+                'type': <interface|connected|static|dynamic|blackhole|tunneled>,
+                'interface': interface-nameif
+            }
+        }
+    }
+}
+

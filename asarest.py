@@ -77,10 +77,16 @@ class Asa(object):
         pass
 
     def populate_ints(self, resp_data, itype):
-        self.data['interfaces'] = {itype: {'kind': resp_data['kind'],
-                                        'count': resp_data['rangeInfo']['total'],
-                                        'items': {}}
-                                }
+        intkey = 'interfaces'
+        intdata = {itype: {'kind': resp_data['kind'],
+                        'count': resp_data['rangeInfo']['total'],
+                        'items': {}}
+                }
+
+        if intkey not in self.data:
+            self.data[intkey] = intdata
+        else:
+            self.data[intkey].update(intdata)
 
         for item in resp_data['items']:
             self.data['interfaces'][itype]['items'][item['hardwareID']] = dict(
@@ -105,10 +111,17 @@ class Asa(object):
                         item['vlanID'])
 
     def populate_routes(self, resp_data, rtype):
-        self.data['routes'] = {rtype: {'kind': resp_data['kind'],
-                                    'count': resp_data['rangeInfo']['total'],
-                                    'items': {'ipv4': {}}}
-                            }
+        rtkey = 'routes'
+        rtdata = {rtype: {'kind': resp_data['kind'],
+                        'count': resp_data['rangeInfo']['total'],
+                        'items': {'ipv4': {}}}
+                }
+
+        if rtkey not in self.data:
+            self.data[rtkey] = rtdata
+        else:
+            self.data[rtkey].update(rtdata)
+
         for item in resp_data['items']:
             if item['kind'] != 'object#IPv4Route':
                 sys.exit('Error:  Unexpected {} route type "{}" - aborting...'.format(rtype,
@@ -164,7 +177,7 @@ class Asa(object):
                     self.data['routes'][rtype]['items']['ipv4'][item]['interface']))
 
 
-if __name__ == '__main__':
+def main():
     resources = ['interfaces/physical', 'interfaces/vlan', 'routing/static']
     asa = Asa()
 
@@ -187,4 +200,10 @@ if __name__ == '__main__':
                 sys.exit('Error:  resource "{}" not handled, aborting...'.format(resource))
         else:
             sys.exit('Error:  Didn\'t get response from ASA, aborting...')
+
+    return asa
+
+
+if __name__ == '__main__':
+    main()
 
