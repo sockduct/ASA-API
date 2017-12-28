@@ -53,3 +53,8 @@
     }
 }
 
+# Radix Tree - rtree:
+rnode = rtree.add(<ip#-prefix/len>)
+rnode.data['interface'] = <interface-nameif>
+rnode.data['via'] = 'interface|connected|static'  # Add rest later...
+

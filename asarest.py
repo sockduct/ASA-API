@@ -1,6 +1,14 @@
+#
+# To do:
+# * Import interface info into rtree
+# * Method to search for target IP and return radix object or info
+#
+
 from __future__ import print_function
 from __future__ import unicode_literals
 
+import win_inet_pton  # Must be imported before radix for Python 2.x (believe fixed in 3.4+)
+import radix
 import requests
 import sys
 
@@ -21,6 +29,7 @@ class Asa(object):
         self.timeout = timeout
         self.verify = verify
         self.data = {}
+        self.rtree = radix.Radix()
 
     def get(self, resource):
         # headers = {'user-agent': 'my-app/0.0.1'}
@@ -140,6 +149,15 @@ class Asa(object):
                         objectId=item['objectId']
                     )
 
+            prefix = item['network']['value']
+            if prefix == 'any4':
+                prefix = '0.0.0.0/0'
+            rnode = self.rtree.add(prefix)
+            rnode.data['interface'] = item['interface']['name']
+            rnode.data['via'] = rtype
+            # Can now search for longest match with:  res = self.rtree.search_best(<IP>)
+            # res.prefix = answer, res.data = data added with rnode...
+
     def print_ints(self, itype):
         ic = self.data['interfaces'][itype]['kind']
         # Remove leading description (e.g., "collection#")
@@ -177,11 +195,11 @@ class Asa(object):
                     self.data['routes'][rtype]['items']['ipv4'][item]['interface']))
 
 
-def main():
+def main(display=False):
     resources = ['interfaces/physical', 'interfaces/vlan', 'routing/static']
     asa = Asa()
 
-    print('Cisco ASA ({}):'.format(asa.mgmt))
+    print('Processing Cisco ASA ({})...'.format(asa.mgmt))
     for resource in resources:
         # Strip off leading part and slash:
         rc = resource[resource.find('/') + 1:]
@@ -189,13 +207,16 @@ def main():
         if resp:
             if resource == 'interfaces/physical':
                 asa.populate_ints(resp, rc)
-                asa.print_ints(rc)
+                if display:
+                    asa.print_ints(rc)
             elif resource == 'interfaces/vlan':
                 asa.populate_ints(resp, rc)
-                asa.print_ints(rc)
+                if display:
+                    asa.print_ints(rc)
             elif resource == 'routing/static':
                 asa.populate_routes(resp, rc)
-                asa.print_routes(rc)
+                if display:
+                    asa.print_routes(rc)
             else:
                 sys.exit('Error:  resource "{}" not handled, aborting...'.format(resource))
         else:
@@ -205,5 +226,5 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    main(display=True)
 
