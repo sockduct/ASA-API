@@ -1,13 +1,20 @@
 #
 # To do:
-# * Import interface info into rtree
 # * Method to search for target IP and return radix object or info
+# * Check if physical (and VLAN) interface is up/up - if not, account for so prefix not used
+# * Add regexp search for interfaces and routes
+# * Add IPv6 support
 #
 
 from __future__ import print_function
 from __future__ import unicode_literals
 
-import win_inet_pton  # Must be imported before radix for Python 2.x (believe fixed in 3.4+)
+import netaddr
+# If want this to run on non-Windows platforms need some logic around this:
+import win_inet_pton    # Must be imported before radix in Windows
+                        # inet_pton not in stdlib socket library in Windows until v3.4
+                        # However, radix uses C extension modules which still fail to
+                        # import even in v3.4+
 import radix
 import requests
 import sys
@@ -73,6 +80,8 @@ class Asa(object):
             else:
                 resp.raise_for_status()
 
+    # Comment these out until implemented
+    '''
     def post(self, resource):
         pass
 
@@ -84,6 +93,7 @@ class Asa(object):
 
     def patch(self, resource):
         pass
+    '''
 
     def populate_ints(self, resp_data, itype):
         intkey = 'interfaces'
@@ -97,6 +107,14 @@ class Asa(object):
         else:
             self.data[intkey].update(intdata)
 
+        # Also create a logical (nameif) to physical mapping table:
+        if 'logical' not in self.data['interfaces']:
+            self.data['interfaces']['logical'] = dict(
+                        kind='collection#nameif',
+                        count=0,
+                        items={}
+                    )
+
         for item in resp_data['items']:
             self.data['interfaces'][itype]['items'][item['hardwareID']] = dict(
                         descr=item['interfaceDesc'],
@@ -106,18 +124,56 @@ class Asa(object):
                         securityLevel=item['securityLevel'],
                         shutdown=item['shutdown']
                     )
+
+            # If logical name exists, update logical table:
+            if item['name']:
+                self.data['interfaces']['logical']['items'][item['name']] = dict(
+                            physical=item['hardwareID'],
+                            securityLevel=item['securityLevel'],
+                            ipv4=dict(
+                                addr=item['ipAddress']['ip']['value'],
+                                mask=item['ipAddress']['netMask']['value']
+                            )
+                        )
+                # Update count
+                self.data['interfaces']['logical']['count'] += 1
+
             if item['ipAddress'] != 'NoneSelected':
                 self.data['interfaces'][itype]['items'][item['hardwareID']]['ipv4'] = dict(
                             addr=item['ipAddress']['ip']['value'],
                             mask=item['ipAddress']['netMask']['value'],
                             kind=item['ipAddress']['kind']
                         )
+
+                # Allow searching for longest match with:  res = self.rtree.search_best(<IP>)
+                # res.prefix = answer, res.data = data added with rnode...
+                address = item['ipAddress']['ip']['value']
+                subnet_mask = item['ipAddress']['netMask']['value']
+                prefix = str(netaddr.IPNetwork(address + '/' + subnet_mask).cidr)
+
+                # Two sets of data - interface address, interface network
+                # Interface address:
+                rnode = self.rtree.add(address)
+                rnode.data['physical'] = item['hardwareID']
+                rnode.data['logical'] = item['name']
+                rnode.data['via'] = 'self'
+
+                # Interface network:
+                rnode = self.rtree.add(prefix)
+                rnode.data['physical'] = item['hardwareID']
+                rnode.data['logical'] = item['name']
+                rnode.data['via'] = 'connected'
             else:
                 self.data['interfaces'][itype]['items'][item['hardwareID']]['ipv4'] = (
                         'NoneSelected')
             if itype == 'vlan':
                 self.data['interfaces'][itype]['items'][item['hardwareID']]['vlanID'] = (
                         item['vlanID'])
+
+                # If logical name exists, update logical table:
+                if item['name']:
+                    self.data['interfaces']['logical']['items'][item['name']]['vlanID'] = item[
+                                'vlanID']
 
     def populate_routes(self, resp_data, rtype):
         rtkey = 'routes'
@@ -139,7 +195,13 @@ class Asa(object):
                 sys.exit('Error:  Unexpected {} route gateway type "{}" - aborting...'.format(
                          rtype, item['gateway']['kind']))
 
-            self.data['routes'][rtype]['items']['ipv4'][item['network']['value']] = dict(
+            # Change 'any4' to 'default':
+            if item['network']['value'] == 'any4':
+                address = 'default'
+            else:
+                address = item['network']['value']
+
+            self.data['routes'][rtype]['items']['ipv4'][address] = dict(
                         netkind=item['network']['kind'],
                         gateway=item['gateway']['value'],
                         ad=item['distanceMetric'],
@@ -149,41 +211,74 @@ class Asa(object):
                         objectId=item['objectId']
                     )
 
+            # Allow searching for longest match with:  res = self.rtree.search_best(<IP>)
+            # res.prefix = answer, res.data = data added with rnode...
             prefix = item['network']['value']
             if prefix == 'any4':
                 prefix = '0.0.0.0/0'
             rnode = self.rtree.add(prefix)
-            rnode.data['interface'] = item['interface']['name']
+            ## Figure out how to get physical interface???
+            rnode.data['logical'] = item['interface']['name']
             rnode.data['via'] = rtype
-            # Can now search for longest match with:  res = self.rtree.search_best(<IP>)
-            # res.prefix = answer, res.data = data added with rnode...
 
-    def print_ints(self, itype):
-        ic = self.data['interfaces'][itype]['kind']
-        # Remove leading description (e.g., "collection#")
-        ic = ic[ic.find('#') + 1:]
-        print(' \Interfaces/{} - {}:'.format(itype, ic))
-        for item in sorted(self.data['interfaces'][itype]['items']):
-            # Check for IPv4 Address Components
-            if self.data['interfaces'][itype]['items'][item]['ipv4'] != 'NoneSelected':
-                ac1 = self.data['interfaces'][itype]['items'][item]['ipv4']['addr']
-                ac2 = self.data['interfaces'][itype]['items'][item]['ipv4']['mask']
-            else:
-                ac1 = '-'
-                ac2 = '-'
-            nc = self.data['interfaces'][itype]['items'][item]['name']
-            if nc == '':
-                nc = '-unset-'
-            sc = self.data['interfaces'][itype]['items'][item]['securityLevel']
-            if sc == -1:
-                sc = '-unset-'
-            if itype == 'physical':
-                print('  \{:>18}, {:>16}/{:<7}:  {}/{}'.format(item, nc, sc, ac1, ac2))
-            elif itype == 'vlan':
-                vc = self.data['interfaces'][itype]['items'][item]['vlanID']
-                print('  \{:<23}<{:>4}>, {:>16}/{:<7}:  {}/{}'.format(item, vc, nc, sc, ac1, ac2))
+    def print_ints(self, itype='all'):
+        if itype == 'all':
+            for k in self.data['interfaces'].keys():
+                self.print_ints(k)
+                print()
+        elif itype == 'available':
+            return self.data['interfaces'].keys()
+        else:
+            ic = self.data['interfaces'][itype]['kind']
+            # Remove leading description (e.g., "collection#")
+            ic = ic[ic.find('#') + 1:]
+            print(' \Interfaces/{} - {}:'.format(itype, ic))
+            for item in sorted(self.data['interfaces'][itype]['items']):
+                if 'ipv4' in self.data['interfaces'][itype]['items'][item]:
+                    # Check for IPv4 Address Components
+                    if self.data['interfaces'][itype]['items'][item]['ipv4'] != 'NoneSelected':
+                        ac1 = self.data['interfaces'][itype]['items'][item]['ipv4']['addr']
+                        ac2 = self.data['interfaces'][itype]['items'][item]['ipv4']['mask']
+                    else:
+                        ac1 = '-'
+                        ac2 = '-'
 
-    def print_routes(self, rtype):
+                if 'name' in self.data['interfaces'][itype]['items'][item]:
+                    # Check for Logical Name
+                    nc = self.data['interfaces'][itype]['items'][item]['name']
+                    if nc == '':
+                        nc = '-unset-'
+
+                if 'securityLevel' in self.data['interfaces'][itype]['items'][item]:
+                    # Check for Logical Security Level
+                    sc = self.data['interfaces'][itype]['items'][item]['securityLevel']
+                    if sc == -1:
+                        sc = '-unset-'
+
+                if 'physical' in self.data['interfaces'][itype]['items'][item]:
+                    # Check for Physical Interface Name
+                    pc = self.data['interfaces'][itype]['items'][item]['physical']
+
+                if 'vlanID' in self.data['interfaces'][itype]['items'][item]:
+                    vc = self.data['interfaces'][itype]['items'][item]['vlanID']
+                else:
+                    vc = '-'
+
+                # Is this a physical/VLAN interface or a logical one?
+                if itype == 'physical':
+                    # print('  \{:>18}, {:>16}/{:<7}:  {}/{}'.format(item, nc, sc, ac1, ac2))
+                    print('  \{:>18}, {:>16}/{:<7}:  {:<15} {}'.format(item, nc, sc, ac1, ac2))
+                elif itype == 'vlan':
+                    # print('  \{:<23}<{:>4}>, {:>16}/{:<7}:  {}/{}'.format(item, vc, nc, sc, ac1,
+                    #         ac2))
+                    print('  \{:<23}<{:>4}>, {:>16}/{:<7}:  {:<15} {}'.format(item, vc, nc, sc,
+                            ac1, ac2))
+                elif itype == 'logical':
+                    # print('  \{:>16}-->{:<18}'.format(item, pc))
+                    print('  \{:>16}/{:<3}, {:<23}<{:>4}>:  {:<15} {}'.format(item, sc, pc, vc,
+                            ac1, ac2))
+
+    def print_routes(self, rtype='static'):
         ic = self.data['routes'][rtype]['kind']
         # Remove leading description (e.g., "collection#")
         ic = ic[ic.find('#') + 1:]
@@ -194,6 +289,22 @@ class Asa(object):
                     self.data['routes'][rtype]['items']['ipv4'][item]['gateway'],
                     self.data['routes'][rtype]['items']['ipv4'][item]['interface']))
 
+    def get_nexthop(self, address):
+        rnode = self.rtree.search_best(address)
+        prefix = rnode.prefix
+        # Modify if it's the default route:
+        if prefix == '0.0.0.0/0':
+            prefix = 'default'
+        if 'physical' in rnode.data:
+            physical = rnode.data['physical']
+        else:
+            physical = self.data['interfaces']['logical']['items'][rnode.data['logical']][
+                                    'physical']
+            # vlan = self.data['interfaces']['logical']['items'][rnode.data['logical']]['vlan']
+        logical = rnode.data['logical']
+        via = rnode.data['via']
+
+        return prefix, physical, logical, via
 
 def main(display=False):
     resources = ['interfaces/physical', 'interfaces/vlan', 'routing/static']
