@@ -1,10 +1,12 @@
-#
+#!/usr/bin/env python2
+'''Asa - class to facilitate interaction with Cisco ASA via its REST API'''
+###################################################################################################
 # To do:
-# * Method to search for target IP and return radix object or info
+# * Finish methods - post, delete, put, patch, ptrace
 # * Check if physical (and VLAN) interface is up/up - if not, account for so prefix not used
 # * Add regexp search for interfaces and routes
 # * Add IPv6 support
-#
+###################################################################################################
 
 from __future__ import print_function
 from __future__ import unicode_literals
@@ -19,6 +21,7 @@ import radix
 import requests
 import sys
 
+
 MGMT = '198.51.100.164'
 USER = 'cisco'
 PASSWD = 'cisco'
@@ -27,6 +30,7 @@ VERIFY = False  # Validate X.509 Certificate? Typically self-signed so default t
 
 # Ignore certificate errors since typically using self-signed certs
 requests.packages.urllib3.disable_warnings()
+
 
 class Asa(object):
     def __init__(self, mgmt=MGMT, user=USER, passwd=PASSWD, timeout=TIMEOUT, verify=VERIFY):
@@ -37,6 +41,12 @@ class Asa(object):
         self.verify = verify
         self.data = {}
         self.rtree = radix.Radix()
+
+    def __repr__(self):
+        return ('<Cisco ASA:  management address={}, username={}, timeout={}, validate '
+                'certificate={}>\n\t<{{data keys:  {}}}, {{radix tree size:  {} prefixes'
+                '}}>'.format(self.mgmt, self.user, self.timeout, self.verify, self.data.keys(),
+                    len(self.rtree.prefixes())))
 
     def get(self, resource):
         # headers = {'user-agent': 'my-app/0.0.1'}
@@ -305,6 +315,10 @@ class Asa(object):
         via = rnode.data['via']
 
         return prefix, physical, logical, via
+
+    def ptrace(self, ingress_int, src_ip, dst_ip, proto=tcp, src_port=-1, dst_port=80):
+        pass
+
 
 def main(display=False):
     resources = ['interfaces/physical', 'interfaces/vlan', 'routing/static']
