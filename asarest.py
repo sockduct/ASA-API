@@ -3,6 +3,14 @@
 ###################################################################################################
 # To do:
 # * Finish methods - post, delete, put, patch, ptrace
+# * Add RETRY global and for connection attempts retry up to that many times - start with 3
+# * Handle connect failures better (try/except...)
+# * Packet-trace interpretation
+#   * Show outgoing next-hop
+#   * Show matched policies (e.g., WCCP-Redirect, NAT, INSPECT, QoS, Flow-Export, BTF, User-Stats,
+#     Logged, ...
+#   * Show reason denied if applicable
+#   * Show NAT results (NATed to ...)
 # * Check if physical (and VLAN) interface is up/up - if not, account for so prefix not used
 # * Add regexp search for interfaces and routes
 # * Add IPv6 support
@@ -17,9 +25,13 @@ import win_inet_pton    # Must be imported before radix in Windows
                         # inet_pton not in stdlib socket library in Windows until v3.4
                         # However, radix uses C extension modules which still fail to
                         # import even in v3.4+
+# 2.x only (3.x = html.parser)
+import HTMLParser
 import radix
+import random
 import requests
 import sys
+from xml.etree import ElementTree
 
 
 MGMT = '198.51.100.164'
@@ -33,6 +45,8 @@ requests.packages.urllib3.disable_warnings()
 
 
 class Asa(object):
+    rng = random.SystemRandom()
+
     def __init__(self, mgmt=MGMT, user=USER, passwd=PASSWD, timeout=TIMEOUT, verify=VERIFY):
         self.mgmt = mgmt
         self.user = user
@@ -91,10 +105,20 @@ class Asa(object):
                 resp.raise_for_status()
 
     # Comment these out until implemented
-    '''
-    def post(self, resource):
-        pass
+    def post(self, resource, payload):
+        resp = requests.post('https://' + self.mgmt + '/api/' + resource,
+                            auth=(self.user, self.passwd),
+                            timeout=self.timeout, verify=self.verify,
+                            json=payload)
+        if resp.ok:
+            # Get JSON data
+            resp_dict = resp.json()
 
+            return resp_dict
+        else:
+            resp.raise_for_status()
+
+    '''
     def delete(self, resource):
         pass
 
@@ -316,8 +340,77 @@ class Asa(object):
 
         return prefix, physical, logical, via
 
-    def ptrace(self, ingress_int, src_ip, dst_ip, proto=tcp, src_port=-1, dst_port=80):
-        pass
+    def get_ptrace(self, src_ip, dst_ip, ingress_int=None, proto='tcp', src_port=-1, dst_port=80):
+        _, _, ingress_logical, _ = self.get_nexthop(src_ip)
+        valid_protos = ['icmp', 'rawip', 'tcp', 'udp']
+        if not ingress_int:
+            ingress_int = ingress_logical
+        elif ingress_int != ingress_logical:
+            sys.exit('Error: {} input as ingress interface, but ASA says it should be {}!'
+                     ''.format(ingress_int, ingress_logical))
+
+        if proto.lower() not in valid_protos:
+            sys.exit('Error: {} input as protocol, ASA only accepts {}.'.format(proto,
+                        valid_protos))
+
+        if src_port < 0:
+            # Default Windows ephemeral port range, also acceptable range for other OS
+            src_port = Asa.rng.randint(49152, 65535)
+
+        ptcmd = 'packet-tracer input {} {} {} {} {} {} detailed xml'.format(ingress_int,
+                    proto, src_ip, src_port, dst_ip, dst_port)
+
+        # Invoke packet-tracer through generic CLI API
+        payload = {'commands': [ptcmd]}
+        res = self.post('cli', payload)
+
+        # "Decode" HTML Character Entity References
+        html_parser = HTMLParser.HTMLParser()
+        # 3.x:
+        # html_parser = html.parser.HTMLParser()
+        decoded = html_parser.unescape(res['response'][0])
+
+        # Invalid XML - repeated elements without a root, fix:
+        decoded = '<ASA-PT>\n' + decoded + '</ASA-PT>\n'
+        etree = ElementTree.fromstring(decoded)
+
+        return etree
+
+    def print_ptrace(self, etree):
+        # Walk tree:
+        for child in etree:
+            print('> {}'.format(child.tag))
+            for subchild in child:
+                sctext = subchild.text.strip() if subchild.text else ''
+                if '\n' in sctext:
+                    sctext = '\n\t\t' + sctext.replace('\n', '\n\t\t')
+                print('    {:>7}:  {}'.format(subchild.tag, sctext))
+
+    def show_ptrace(self, etree, verbose=False):
+        pt_res = {}
+        summary = {}
+
+        for child in etree.find('result'):
+            pt_res[child.tag] = child.text.strip()
+
+        if verbose:
+            print('pt-res:\n{}\n'.format(pt_res))
+
+        summary['input'] = '{}[{}/{}]'.format(pt_res['input-interface'],
+                            pt_res['input-status'], pt_res['input-line-status'])
+        summary['output'] = '{}[{}/{}]'.format(pt_res['output-interface'],
+                            pt_res['output-status'], pt_res['output-line-status'])
+        summary['action'] = pt_res['action']
+
+        print('\nFrom {} --> {}\nResult:  {}\n'.format(summary['input'], summary['output'],
+                summary['action']))
+
+
+def test():
+    asa = main()
+    res = asa.get_ptrace('172.16.1.1', '8.8.8.8')
+    asa.print_ptrace(res)
+    asa.show_ptrace(res)
 
 
 def main(display=False):
@@ -351,5 +444,6 @@ def main(display=False):
 
 
 if __name__ == '__main__':
-    main(display=True)
+    # main(display=True)
+    test()
 
