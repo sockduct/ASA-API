@@ -3,14 +3,14 @@
 ###################################################################################################
 # To do:
 # * Finish methods - post, delete, put, patch, ptrace
-# * Add RETRY global and for connection attempts retry up to that many times - start with 3
-# * Handle connect failures better (try/except...)
 # * Packet-trace interpretation
-#   * Show outgoing next-hop
 #   * Show matched policies (e.g., WCCP-Redirect, NAT, INSPECT, QoS, Flow-Export, BTF, User-Stats,
 #     Logged, ...
-#   * Show reason denied if applicable
 #   * Show NAT results (NATed to ...)
+#   * Allow input of names/FQDNs
+#   * Allow input of service names
+#   * Make service name input easier
+#   * Should etree be stored in the class/instance?
 # * Check if physical (and VLAN) interface is up/up - if not, account for so prefix not used
 # * Add regexp search for interfaces and routes
 # * Add IPv6 support
@@ -30,6 +30,7 @@ import HTMLParser
 import radix
 import random
 import requests
+from requests.exceptions import ConnectTimeout
 import sys
 from xml.etree import ElementTree
 
@@ -37,7 +38,8 @@ from xml.etree import ElementTree
 MGMT = '198.51.100.164'
 USER = 'cisco'
 PASSWD = 'cisco'
-TIMEOUT = 5.0
+RETRY = 2
+TIMEOUT = 3.0
 VERIFY = False  # Validate X.509 Certificate? Typically self-signed so default to no.
 
 # Ignore certificate errors since typically using self-signed certs
@@ -59,10 +61,15 @@ class Asa(object):
     def __repr__(self):
         return ('<Cisco ASA:  management address={}, username={}, timeout={}, validate '
                 'certificate={}>\n\t<{{data keys:  {}}}, {{radix tree size:  {} prefixes'
-                '}}>'.format(self.mgmt, self.user, self.timeout, self.verify, self.data.keys(),
-                    len(self.rtree.prefixes())))
+                '}}>\n\t<{{data/routes/static:  {} prefixes ({} ipv4)}}>\n\t<{{data/'
+                'interfaces:  physical - {}, logical - {}, vlan - {}}}>'.format(self.mgmt,
+                    self.user, self.timeout, self.verify, self.data.keys(),
+                    len(self.rtree.prefixes()), self.data['routes']['static']['count'],
+                    len(self.data['routes']['static']['items']['ipv4']),
+                    self.data['interfaces']['physical']['count'], self.data['interfaces'][
+                        'logical']['count'], self.data['interfaces']['vlan']['count']))
 
-    def get(self, resource):
+    def get(self, resource, verbose=False):
         # headers = {'user-agent': 'my-app/0.0.1'}
         # resp = requests.get('https://' + ASA + '/api/' + resource, headers=headers)
 
@@ -72,12 +79,27 @@ class Asa(object):
         # Note - ASA returns up to 100 records per query
         data_loc = 0  # Current range of data (i.e., 0-99)
         get_payload = {'offset': 0}
+        retries = 0
 
         while True:
-            resp = requests.get('https://' + self.mgmt + '/api/' + resource,
-                                auth=(self.user, self.passwd),
-                                timeout=self.timeout, verify=self.verify,
-                                params=get_payload)
+            try:
+                if verbose:
+                    print('Attempting get connection to ASA...')
+                resp = requests.get('https://' + self.mgmt + '/api/' + resource,
+                                    auth=(self.user, self.passwd),
+                                    timeout=self.timeout, verify=self.verify,
+                                    params=get_payload)
+            except ConnectTimeout:
+                retries += 1
+                if verbose:
+                    print('get connection timed out/failed to complete within timeout '
+                          'period ({}s) - retry # {}...'.format(self.timeout, retries))
+                if retries <= RETRY:
+                    continue
+                else:
+                    sys.exit('Error:  Exceeded maximum number of retries ({}) for get'
+                             ' - giving up.'.format(RETRY))
+
             if resp.ok:
                 # Get JSON data
                 resp_dict = resp.json()
@@ -105,11 +127,30 @@ class Asa(object):
                 resp.raise_for_status()
 
     # Comment these out until implemented
-    def post(self, resource, payload):
-        resp = requests.post('https://' + self.mgmt + '/api/' + resource,
-                            auth=(self.user, self.passwd),
-                            timeout=self.timeout, verify=self.verify,
-                            json=payload)
+    def post(self, resource, payload, verbose=False):
+        retries = 0
+
+        while True:
+            try:
+                if verbose:
+                    print('Attempting post connection to ASA...')
+                resp = requests.post('https://' + self.mgmt + '/api/' + resource,
+                                    auth=(self.user, self.passwd),
+                                    timeout=self.timeout, verify=self.verify,
+                                    json=payload)
+            except ConnectTimeout:
+                retries += 1
+                if verbose:
+                    print('post connection timed out/failed to complete within timeout '
+                          'period ({}s) - retry # {}...'.format(self.timeout, retries))
+                if retries <= RETRY:
+                    continue
+                else:
+                    sys.exit('Error:  Exceeded maximum number of retries ({}) for post'
+                             ' - giving up.'.format(RETRY))
+            else:
+                break
+
         if resp.ok:
             # Get JSON data
             resp_dict = resp.json()
@@ -340,7 +381,8 @@ class Asa(object):
 
         return prefix, physical, logical, via
 
-    def get_ptrace(self, src_ip, dst_ip, ingress_int=None, proto='tcp', src_port=-1, dst_port=80):
+    def get_ptrace(self, src_ip, dst_ip, ingress_int=None, proto='tcp', src_port=-1,
+                   dst_port=80, verbose=False):
         _, _, ingress_logical, _ = self.get_nexthop(src_ip)
         valid_protos = ['icmp', 'rawip', 'tcp', 'udp']
         if not ingress_int:
@@ -362,7 +404,7 @@ class Asa(object):
 
         # Invoke packet-tracer through generic CLI API
         payload = {'commands': [ptcmd]}
-        res = self.post('cli', payload)
+        res = self.post('cli', payload, verbose=True)
 
         # "Decode" HTML Character Entity References
         html_parser = HTMLParser.HTMLParser()
@@ -396,14 +438,46 @@ class Asa(object):
         if verbose:
             print('pt-res:\n{}\n'.format(pt_res))
 
+        # Get Egress Next-Hop
+        # XPath query string to locate section of packet-tracer output with
+        # next-hop info:
+        target = './/*[subtype="Resolve Egress Interface"]/subtype/..'
+        nexthop = etree.find(target)
+        # Using is not None per library requirement
+        if nexthop is not None:
+            nexthop_str = nexthop.find('extra').text.strip()
+            nexthop_ip = nexthop_str.split()[2]
+            nexthop_int = nexthop_str.split()[-1]
+
+        # Get First top-level element with result of 'DROP'
+        target = './/*[result="DROP"]/result/..'
+        deny_elmt = etree.find(target)
+        # Using is not None per library requirement
+        if deny_elmt is not None:
+            deny_info = ('type={}, subtype={}, result={}, matching configuration:\n'
+                         ''.format(deny_elmt.find('type').text.strip(),
+                                   deny_elmt.find('subtype').text.strip(),
+                                   deny_elmt.find('result').text.strip()))
+            temp = deny_elmt.find('config').text.strip()
+            temp = '\t' + temp.replace('\n', '\n\t')
+            deny_info += temp
+
         summary['input'] = '{}[{}/{}]'.format(pt_res['input-interface'],
                             pt_res['input-status'], pt_res['input-line-status'])
         summary['output'] = '{}[{}/{}]'.format(pt_res['output-interface'],
                             pt_res['output-status'], pt_res['output-line-status'])
         summary['action'] = pt_res['action']
 
-        print('\nFrom {} --> {}\nResult:  {}\n'.format(summary['input'], summary['output'],
-                summary['action']))
+        print('\nFrom {} --> {}\nResult:  {}'.format(summary['input'],
+              summary['output'], summary['action']))
+        if pt_res['action'] == 'allow':
+            print('\t(Egress next-hop:  {})\n'.format(nexthop_ip))
+        elif pt_res['action'] == 'drop':
+            print('  Drop reason:  {}'.format(pt_res['drop-reason']))
+            print('  Details:  {}\n'.format(deny_info))
+        else:
+            print('Unexpected result "{}"\n\n'.format(pt_res['action']))
+            
 
 
 def test():
@@ -421,7 +495,7 @@ def main(display=False):
     for resource in resources:
         # Strip off leading part and slash:
         rc = resource[resource.find('/') + 1:]
-        resp = asa.get(resource)
+        resp = asa.get(resource, verbose=True)
         if resp:
             if resource == 'interfaces/physical':
                 asa.populate_ints(resp, rc)
