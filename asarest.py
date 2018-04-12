@@ -2,39 +2,57 @@
 '''Asa - class to facilitate interaction with Cisco ASA via its REST API'''
 ###################################################################################################
 # To do:
-# * Finish methods - post, delete, put, patch, ptrace
 # * Packet-trace interpretation
-#   * Show matched policies (e.g., WCCP-Redirect, NAT, INSPECT, QoS, Flow-Export, BTF, User-Stats,
-#     Logged, ...
+#   * Show matched policies (e.g., in order of interest:
+#     NAT, INSPECT, WCCP-Redirect, (dynamic vs. static?) Shun, BTF, IPS-Module,
+#     QoS, Flow-Export, User-Stats, Logged, Others?
 #   * Show NAT results (NATed to ...)
+#     * Outside to inside
+#     * Inside to outside
+#     * Both
 #   * Allow input of names/FQDNs
 #   * Allow input of service names
 #   * Make service name input easier
 #   * Should etree be stored in the class/instance?
 # * Check if physical (and VLAN) interface is up/up - if not, account for so prefix not used
+# * Support getting authentication token vs. username/password auth
+# * Finish methods - delete, put, patch
 # * Add regexp search for interfaces and routes
 # * Add IPv6 support
+###################################################################################################
+# packet-tracer functionality/options v9.4.4.13:
+# packet-tracer input <nameif> <icmp>|<rawip>|<tcp>|<udp> [inline-tag <#>]
+#     <srcip>|[fqdn <strsrc>]|[security-group [name <str>]|[tag <#>]|[user [<domain>\]<user>]
+#         <srcport>|<srcsvc>
+#     <dstip>|[fqdn <strdst>]|[security-group [name <str>]|[tag <#>]
+#         <dstport>|<dstsvc>
+#     [vxlan-inner <#> <icmp>|<rawip>|<tcp>|<udp> <srcip> <srcport>|<srcsvc>
+#         <dstip> <dstport>|<dstsvc> <srcmac> <dstmac>]
+#     [detailed] [xml]
 ###################################################################################################
 
 from __future__ import print_function
 from __future__ import unicode_literals
 
+# stdlib
+import HTMLParser # 2.x only (3.x = html.parser)
+import random
+import sys
+from xml.etree import ElementTree
+
+# 3rd party
 import netaddr
 # If want this to run on non-Windows platforms need some logic around this:
 import win_inet_pton    # Must be imported before radix in Windows
                         # inet_pton not in stdlib socket library in Windows until v3.4
                         # However, radix uses C extension modules which still fail to
                         # import even in v3.4+
-# 2.x only (3.x = html.parser)
-import HTMLParser
 import radix
-import random
 import requests
 from requests.exceptions import ConnectTimeout
-import sys
-from xml.etree import ElementTree
 
 
+# Globals
 MGMT = '198.51.100.164'
 USER = 'cisco'
 PASSWD = 'cisco'
@@ -57,6 +75,7 @@ class Asa(object):
         self.verify = verify
         self.data = {}
         self.rtree = radix.Radix()
+        self.ptrace_data = {}
 
     def __repr__(self):
         return ('<Cisco ASA:  management address={}, username={}, timeout={}, validate '
@@ -126,7 +145,6 @@ class Asa(object):
             else:
                 resp.raise_for_status()
 
-    # Comment these out until implemented
     def post(self, resource, payload, verbose=False):
         retries = 0
 
@@ -159,6 +177,7 @@ class Asa(object):
         else:
             resp.raise_for_status()
 
+    # Comment these out until implemented
     '''
     def delete(self, resource):
         pass
@@ -381,6 +400,21 @@ class Asa(object):
 
         return prefix, physical, logical, via
 
+    def ptrace(self, *args, **kwargs):
+        if 'show' in kwargs:
+            show_arg = kwargs.pop('show').lower()
+        else:
+            show_arg = None
+        if 'verbose' in kwargs:
+            verbose = kwargs['verbose']
+        else:
+            verbose = True ## Change to False when done debugging
+        self.get_ptrace(*args, **kwargs)
+        if show_arg == 'full':
+                self.print_ptrace()
+        else:
+            self.show_ptrace(verbose=True)
+
     def get_ptrace(self, src_ip, dst_ip, ingress_int=None, proto='tcp', src_port=-1,
                    dst_port=80, verbose=False):
         _, _, ingress_logical, _ = self.get_nexthop(src_ip)
@@ -416,21 +450,51 @@ class Asa(object):
         decoded = '<ASA-PT>\n' + decoded + '</ASA-PT>\n'
         etree = ElementTree.fromstring(decoded)
 
-        return etree
+        self.ptrace_data['etree'] = etree
+        self.ptrace_data.update(src_ip=src_ip, dst_ip=dst_ip, ingress_int=ingress_int,
+                           proto=proto, src_port=src_port, dst_port=dst_port)
 
-    def print_ptrace(self, etree):
+    def print_ptrace(self):
+        etree = self.ptrace_data.get('etree')
+
+        if etree is None:
+            return
+
         # Walk tree:
         for child in etree:
-            print('> {}'.format(child.tag))
+            if child.tag.lower() == 'phase':
+                print('\n> {} - '.format(child.tag), end='')
+            else:
+                print('\n> {}:'.format(child.tag))
             for subchild in child:
-                sctext = subchild.text.strip() if subchild.text else ''
+                sctext = subchild.text.strip() if subchild.text else 'None'
                 if '\n' in sctext:
                     sctext = '\n\t\t' + sctext.replace('\n', '\n\t\t')
-                print('    {:>7}:  {}'.format(subchild.tag, sctext))
+                if subchild.tag in ['id', 'type', 'subtype']:
+                    print('{}={}, '.format(subchild.tag, sctext), end='')
+                elif subchild.tag == 'result':
+                    print('{}={}'.format(subchild.tag, sctext))
+                elif subchild.tag in ['config', 'extra']:
+                    print('    {:>6}:  {}'.format(subchild.tag, sctext))
+                else:
+                    print('  {:>18}:  {}'.format(subchild.tag, sctext))
 
-    def show_ptrace(self, etree, verbose=False):
+    def show_ptrace(self, verbose=False):
+        etree = self.ptrace_data.get('etree')
+
+        if etree is None:
+            return
+
         pt_res = {}
         summary = {}
+        orig_src_ip = self.ptrace_data['src_ip']
+        orig_src_port = self.ptrace_data['src_port']
+        orig_dst_ip = self.ptrace_data['dst_ip']
+        orig_dst_port = self.ptrace_data['dst_port']
+        new_src_ip = orig_src_ip
+        new_src_port = orig_src_port
+        new_dst_ip = orig_dst_ip
+        new_dst_port = orig_dst_port
 
         for child in etree.find('result'):
             pt_res[child.tag] = child.text.strip()
@@ -452,6 +516,7 @@ class Asa(object):
         # Get First top-level element with result of 'DROP'
         target = './/*[result="DROP"]/result/..'
         deny_elmt = etree.find(target)
+
         # Using is not None per library requirement
         if deny_elmt is not None:
             deny_info = ('type={}, subtype={}, result={}, matching configuration:\n'
@@ -462,14 +527,46 @@ class Asa(object):
             temp = '\t' + temp.replace('\n', '\n\t')
             deny_info += temp
 
+        # Look for NAT Rewrite
+        target = './/*[type="NAT"]/type/..'
+        nat_elmts = etree.findall(target)
+        nat_match = 0
+        for elmt in nat_elmts:
+            res = {}
+            for target_type in ['type', 'subtype', 'result', 'config', 'extra']:
+                etype = elmt.find(target_type).text
+                if etype is not None:
+                    etype.strip()
+                res[target_type] = etype
+            if res['subtype'] is None and res['result'] == 'ALLOW':
+                nat_match += 1
+                if nat_match > 1:
+                    sys.exit('Error:  Expected only one matching NAT entry, found more.')
+                temp = res['extra'].split()
+                src = temp[2]
+                dst = temp[4]
+                new_src_ip, new_src_port = src.split('/')
+                new_dst_ip, new_dst_port = dst.split('/')
+
+            '''
+            print('=' * 80)
+            print('Type:  {}\nSubtype:  {}\nResult:  {}\nConfig:  {}\nExtra:  {}\n'
+                  ''.format(res['type'], res['subtype'], res['result'],
+                      res['config'], res['extra']))
+            print('-' * 80)
+            '''
+
         summary['input'] = '{}[{}/{}]'.format(pt_res['input-interface'],
                             pt_res['input-status'], pt_res['input-line-status'])
         summary['output'] = '{}[{}/{}]'.format(pt_res['output-interface'],
                             pt_res['output-status'], pt_res['output-line-status'])
         summary['action'] = pt_res['action']
 
-        print('\nFrom {} --> {}\nResult:  {}'.format(summary['input'],
-              summary['output'], summary['action']))
+        print('\nEnter ASA on {} named logical interface - {}:{} --> {}:{}'.format(
+                summary['input'], orig_src_ip, orig_src_port, orig_dst_ip, orig_dst_port))
+        print('Exit ASA on {} named logical interface - {}:{} --> {}:{}'.format(
+                summary['output'], new_src_ip, new_src_port, new_dst_ip, new_dst_port))
+        print('Result:  {}'.format(summary['action']))
         if pt_res['action'] == 'allow':
             print('\t(Egress next-hop:  {})\n'.format(nexthop_ip))
         elif pt_res['action'] == 'drop':
@@ -478,7 +575,6 @@ class Asa(object):
         else:
             print('Unexpected result "{}"\n\n'.format(pt_res['action']))
             
-
 
 def test():
     asa = main()
