@@ -3,6 +3,7 @@
 ###################################################################################################
 # To do:
 # * Packet-trace interpretation
+#   * Look into ssh key-based authentication
 #   * Show matched policies (e.g., in order of interest:
 #     NAT, INSPECT, WCCP-Redirect, (dynamic vs. static?) Shun, BTF, IPS-Module,
 #     QoS, Flow-Export, User-Stats, Logged, Others?
@@ -416,12 +417,12 @@ class Asa(object):
             self.show_ptrace(verbose=True)
 
     def get_ptrace(self, src_ip, dst_ip, ingress_int=None, proto='tcp', src_port=-1,
-                   dst_port=80, verbose=False):
+                   dst_port=80, override=False, verbose=False):
         _, _, ingress_logical, _ = self.get_nexthop(src_ip)
         valid_protos = ['icmp', 'rawip', 'tcp', 'udp']
         if not ingress_int:
             ingress_int = ingress_logical
-        elif ingress_int != ingress_logical:
+        elif ingress_int != ingress_logical and not override:
             sys.exit('Error: {} input as ingress interface, but ASA says it should be {}!'
                      ''.format(ingress_int, ingress_logical))
 
@@ -479,6 +480,17 @@ class Asa(object):
                 else:
                     print('  {:>18}:  {}'.format(subchild.tag, sctext))
 
+    def strip_elmts(self, etree):
+        res = {}
+
+        for target_type in ['type', 'subtype', 'result', 'config', 'extra']:
+            etype = etree.find(target_type).text
+            if etype is not None:
+                etype.strip()
+            res[target_type] = etype
+
+        return res
+
     def show_ptrace(self, verbose=False):
         etree = self.ptrace_data.get('etree')
 
@@ -487,6 +499,8 @@ class Asa(object):
 
         pt_res = {}
         summary = {}
+        nexthop_valid = False
+        exit_asa = True
         orig_src_ip = self.ptrace_data['src_ip']
         orig_src_port = self.ptrace_data['src_port']
         orig_dst_ip = self.ptrace_data['dst_ip']
@@ -512,6 +526,9 @@ class Asa(object):
             nexthop_str = nexthop.find('extra').text.strip()
             nexthop_ip = nexthop_str.split()[2]
             nexthop_int = nexthop_str.split()[-1]
+            nexthop_valid = True
+            if verbose:
+                print('Found nexthop of {} out {}...'.format(nexthop_ip, nexthop_int))
 
         # Get First top-level element with result of 'DROP'
         target = './/*[result="DROP"]/result/..'
@@ -519,26 +536,26 @@ class Asa(object):
 
         # Using is not None per library requirement
         if deny_elmt is not None:
+            if verbose:
+                print('Found deny element...')
+
+            res = self.strip_elmts(deny_elmt)
             deny_info = ('type={}, subtype={}, result={}, matching configuration:\n'
-                         ''.format(deny_elmt.find('type').text.strip(),
-                                   deny_elmt.find('subtype').text.strip(),
-                                   deny_elmt.find('result').text.strip()))
-            temp = deny_elmt.find('config').text.strip()
+                         ''.format(res['type'], res['subtype'], res['result']))
+            temp = res['config']
             temp = '\t' + temp.replace('\n', '\n\t')
             deny_info += temp
+            exit_asa = False
 
         # Look for NAT Rewrite
         target = './/*[type="NAT"]/type/..'
         nat_elmts = etree.findall(target)
         nat_match = 0
         for elmt in nat_elmts:
-            res = {}
-            for target_type in ['type', 'subtype', 'result', 'config', 'extra']:
-                etype = elmt.find(target_type).text
-                if etype is not None:
-                    etype.strip()
-                res[target_type] = etype
+            res = self.strip_elmts(elmt)
             if res['subtype'] is None and res['result'] == 'ALLOW':
+                if verbose:
+                    print('Found NAT rewrite element...')
                 nat_match += 1
                 if nat_match > 1:
                     sys.exit('Error:  Expected only one matching NAT entry, found more.')
@@ -548,13 +565,25 @@ class Asa(object):
                 new_src_ip, new_src_port = src.split('/')
                 new_dst_ip, new_dst_port = dst.split('/')
 
-            '''
-            print('=' * 80)
-            print('Type:  {}\nSubtype:  {}\nResult:  {}\nConfig:  {}\nExtra:  {}\n'
-                  ''.format(res['type'], res['subtype'], res['result'],
-                      res['config'], res['extra']))
-            print('-' * 80)
-            '''
+        # Look for UN-NAT Rewrite
+        target = './/*[type="UN-NAT"]/type/..'
+        nat_elmts = etree.findall(target)
+        nat_match = 0
+        for elmt in nat_elmts:
+            res = self.strip_elmts(elmt)
+            if res['subtype'] == 'static' and res['result'] == 'ALLOW':
+                if verbose:
+                    print('Found UN-NAT rewrite element...')
+                nat_match += 1
+                if nat_match > 1:
+                    sys.exit('Error:  Expected only one matching UN-NAT entry, found more.')
+                temp = res['extra'].split()
+                egress_int = temp[5]
+                old_dst = temp[7]
+                new_dst = temp[9]
+                new_dst_ip, new_dst_port = new_dst.split('/')
+                if egress_int != nexthop_int:
+                    nexthop_valid = False
 
         summary['input'] = '{}[{}/{}]'.format(pt_res['input-interface'],
                             pt_res['input-status'], pt_res['input-line-status'])
@@ -564,19 +593,35 @@ class Asa(object):
 
         print('\nEnter ASA on {} named logical interface - {}:{} --> {}:{}'.format(
                 summary['input'], orig_src_ip, orig_src_port, orig_dst_ip, orig_dst_port))
-        print('Exit ASA on {} named logical interface - {}:{} --> {}:{}'.format(
-                summary['output'], new_src_ip, new_src_port, new_dst_ip, new_dst_port))
+        if exit_asa:
+            print('Exit ASA on {} named logical interface - {}:{} --> {}:{}'.format(
+                    summary['output'], new_src_ip, new_src_port, new_dst_ip, new_dst_port))
         print('Result:  {}'.format(summary['action']))
-        if pt_res['action'] == 'allow':
+        if pt_res['action'] == 'allow' and nexthop_valid:
             print('\t(Egress next-hop:  {})\n'.format(nexthop_ip))
         elif pt_res['action'] == 'drop':
+            print('  Selected egress interface:  {}'.format(pt_res['output-interface']))
             print('  Drop reason:  {}'.format(pt_res['drop-reason']))
             print('  Details:  {}\n'.format(deny_info))
+        elif pt_res['action'] == 'allow' and not nexthop_valid:
+            pass
         else:
             print('Unexpected result "{}"\n\n'.format(pt_res['action']))
             
 
 def test():
+    '''Test cases:
+       * Permit from inside to outside
+         * 172.16.1.1 --> 8.8.8.8
+       * Deny from inside to outside
+         * 172.16.2.3 --> 128.102.3.230
+       * Deny from outside to inside
+         * 191.96.249.11 --> 12.40.205.159
+         * 201.2.5.137 --> 12.187.127.69:8888
+       * Permit from outside to inside
+         * 201.2.3.19 --> 12.40.205.159
+       * Various drops
+    '''
     asa = main()
     res = asa.get_ptrace('172.16.1.1', '8.8.8.8')
     asa.print_ptrace(res)
