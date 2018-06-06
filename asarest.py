@@ -1,4 +1,4 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python2.7-32
 '''Asa - class to facilitate interaction with Cisco ASA via its REST API'''
 ###################################################################################################
 # To do:
@@ -15,9 +15,23 @@
 #   * Allow input of service names
 #   * Make service name input easier
 #   * Should etree be stored in the class/instance?
+# * Create CLI version of this using click to support paging
+# * Support ICMP Type/Code options
+# * populate_ints only supports physical and vlan types, improve to check for all interface
+#   types (bvi, ethernet, firepower, portchannel, redundant, setup), should also check if
+#   in single or multi mode as the latter requires a different API
 # * Check if physical (and VLAN) interface is up/up - if not, account for so prefix not used
 # * Support getting authentication token vs. username/password auth
+# * g
+# * Consider re-factoring
+#   * Base supports HTTP verbs and auth
+#   * Separate class which inherits base and adds retrieval type info
+#   * Separate class which inherits base and adds display/output options
+#   * Asa clas which inherits all the above
 # * Finish methods - delete, put, patch
+# * Consider separating ASA REST interface and packet-tracer interpretation functionality
+#   into separate modules
+# * Migrate to Python 3.x?
 # * Add regexp search for interfaces and routes
 # * Add IPv6 support
 ###################################################################################################
@@ -33,22 +47,25 @@
 ###################################################################################################
 
 from __future__ import print_function
-from __future__ import unicode_literals
+# Removed to make click happy!
+# from __future__ import unicode_literals
 
 # stdlib
+from collections import OrderedDict
 import HTMLParser # 2.x only (3.x = html.parser)
 import random
 import sys
 from xml.etree import ElementTree
 
 # 3rd party
+import click
 import netaddr
 # If want this to run on non-Windows platforms need some logic around this:
 import win_inet_pton    # Must be imported before radix in Windows
                         # inet_pton not in stdlib socket library in Windows until v3.4
                         # However, radix uses C extension modules which still fail to
                         # import even in v3.4+
-import radix
+import radix            # Note:  pip install py-radix
 import requests
 from requests.exceptions import ConnectTimeout
 
@@ -66,6 +83,7 @@ requests.packages.urllib3.disable_warnings()
 
 
 class Asa(object):
+    # Keep in the class to facilitate thread safety
     rng = random.SystemRandom()
 
     def __init__(self, mgmt=MGMT, user=USER, passwd=PASSWD, timeout=TIMEOUT, verify=VERIFY):
@@ -189,6 +207,28 @@ class Asa(object):
     def patch(self, resource):
         pass
     '''
+
+    # Need to deal with errors - if get 400, output error instead of dying...
+    def send_cmds(self, cmds, verbose=False):
+        cmd_array = [c.strip() for c in cmds.split(';')]
+        if verbose:
+            print('Asa.send_cmds/parsed out:  {}'.format(cmd_array))
+
+        payload = {'commands': cmd_array}
+        res = self.post('cli', payload, verbose=False)
+        output = res['response']
+        if verbose:
+            print('Asa.send_cmds/received response of {} element(s)'.format(len(output)))
+
+        # If a single command/response, return raw output
+        if len(output) == 1:
+            return output[0]
+        # Otherwise return list
+        else:
+            out_dict = OrderedDict()
+            for i, c in enumerate(cmd_array):
+                out_dict[c] = output[i]
+            return out_dict
 
     def populate_ints(self, resp_data, itype):
         intkey = 'interfaces'
@@ -316,6 +356,28 @@ class Asa(object):
             rnode.data['logical'] = item['interface']['name']
             rnode.data['via'] = rtype
 
+    # Load Asa interfaces and routes
+    def populate(self):
+        # Note - this may be incomplete - better to move this to populate_ints and have it
+        # dynamically discover all available interface types and interfaces
+        resources = ['interfaces/physical', 'interfaces/vlan', 'routing/static']
+    
+        for resource in resources:
+            # Strip off leading part and slash:
+            rc = resource[resource.find('/') + 1:]
+            resp = self.get(resource, verbose=False)
+            if resp:
+                if resource == 'interfaces/physical':
+                    self.populate_ints(resp, rc)
+                elif resource == 'interfaces/vlan':
+                    self.populate_ints(resp, rc)
+                elif resource == 'routing/static':
+                    self.populate_routes(resp, rc)
+                else:
+                    sys.exit('Error:  resource "{}" not handled, aborting...'.format(resource))
+            else:
+                sys.exit('Error:  Didn\'t get response from ASA, aborting...')
+
     def print_ints(self, itype='all'):
         if itype == 'all':
             for k in self.data['interfaces'].keys():
@@ -401,6 +463,7 @@ class Asa(object):
 
         return prefix, physical, logical, via
 
+    # Depends on interfaces and routes being loaded
     def ptrace(self, *args, **kwargs):
         if 'show' in kwargs:
             show_arg = kwargs.pop('show').lower()
@@ -409,15 +472,15 @@ class Asa(object):
         if 'verbose' in kwargs:
             verbose = kwargs['verbose']
         else:
-            verbose = True ## Change to False when done debugging
+            verbose = False
         self.get_ptrace(*args, **kwargs)
         if show_arg == 'full':
                 self.print_ptrace()
         else:
-            self.show_ptrace(verbose=True)
+            self.show_ptrace(verbose)
 
-    def get_ptrace(self, src_ip, dst_ip, ingress_int=None, proto='tcp', src_port=-1,
-                   dst_port=80, override=False, verbose=False):
+    def get_ptrace(self, src_ip, dst_ip, dst_port=80, proto='tcp', ingress_int=None, src_port=-1,
+                   override=False, verbose=False):
         _, _, ingress_logical, _ = self.get_nexthop(src_ip)
         valid_protos = ['icmp', 'rawip', 'tcp', 'udp']
         if not ingress_int:
@@ -438,14 +501,13 @@ class Asa(object):
                     proto, src_ip, src_port, dst_ip, dst_port)
 
         # Invoke packet-tracer through generic CLI API
-        payload = {'commands': [ptcmd]}
-        res = self.post('cli', payload, verbose=True)
+        res = self.send_cmds(ptcmd)
 
         # "Decode" HTML Character Entity References
         html_parser = HTMLParser.HTMLParser()
         # 3.x:
         # html_parser = html.parser.HTMLParser()
-        decoded = html_parser.unescape(res['response'][0])
+        decoded = html_parser.unescape(res)
 
         # Invalid XML - repeated elements without a root, fix:
         decoded = '<ASA-PT>\n' + decoded + '</ASA-PT>\n'
@@ -555,15 +617,18 @@ class Asa(object):
             res = self.strip_elmts(elmt)
             if res['subtype'] is None and res['result'] == 'ALLOW':
                 if verbose:
-                    print('Found NAT rewrite element...')
+                    # print('Found NAT rewrite element... {}'.format(res['extra']))
+                    print('Found NAT rewrite element...'.format(res['extra']))
                 nat_match += 1
                 if nat_match > 1:
                     sys.exit('Error:  Expected only one matching NAT entry, found more.')
                 temp = res['extra'].split()
                 src = temp[2]
                 dst = temp[4]
-                new_src_ip, new_src_port = src.split('/')
-                new_dst_ip, new_dst_port = dst.split('/')
+                tmp_src_ip, tmp_src_port = src.split('/')
+                if tmp_src_ip != orig_src_ip and tmp_src_port != orig_src_port:
+                    sys.exit('Error:  Source IP and port don\'t match original.')
+                new_src_ip, new_src_port = dst.split('/')
 
         # Look for UN-NAT Rewrite
         target = './/*[type="UN-NAT"]/type/..'
@@ -621,11 +686,22 @@ def test():
        * Permit from outside to inside
          * 201.2.3.19 --> 12.40.205.159
        * Various drops
+
+       Example Test Run:
+       asa = asarest.main()
+       asa.ptrace('172.16.1.1', '8.8.8.8') --> Allow
+       asa.ptrace('172.16.2.3', '128.102.3.230') --> Drop
+       asa.ptrace('191.96.249.11', '12.40.205.159') --> Drop
+       asa.ptrace('201.2.5.137', '12.187.127.69', '8888') --> Drop
+       asa.ptrace('201.2.3.19', '12.40.205.159') --> Allow
+
+       Debug:
+       asa.ptrace('172.16.2.4', '8.8.8.8', show='full') --> Full packet-tracer output
     '''
     asa = main()
-    res = asa.get_ptrace('172.16.1.1', '8.8.8.8')
-    asa.print_ptrace(res)
-    asa.show_ptrace(res)
+    ## res = asa.get_ptrace('172.16.1.1', '8.8.8.8')
+    ## asa.print_ptrace(res)
+    ## asa.show_ptrace(res)
 
 
 def main(display=False):
@@ -658,7 +734,78 @@ def main(display=False):
     return asa
 
 
+@click.group()
+@click.option('--interface', '-i', default='0.0.0.0', prompt='ASA Management Interface IP Address',
+              help='IP Address of ASA interface to connect to')
+@click.option('--username', '-u', prompt='Username', help='Username to authenticate to ASA')
+@click.option('--password', '-pw', prompt='Password', hide_input=True,
+              help='Password to authenticate to ASA')
+@click.option('--debug/--no-debug', default=False)
+@click.pass_context
+def cli(ctx, interface, username, password, debug):
+    '''CLI tool to interact with Cisco ASA via its REST API.'''
+    # Initialize Asa instance and its management interface (how to connect to
+    # its API endpoint)
+    asa = Asa(mgmt=interface)
+
+    # Populate context object:
+    ctx.obj = {'asa': asa}
+    for k, v in [('interface', interface), ('username', username), ('password', password),
+                 ('debug', debug)]:
+        ctx.obj[k] = v
+
+
+@cli.command()
+@click.option('--source_ip', '-sip', default='0.0.0.0', prompt='Packet Source Address',
+              help='Source IP Address for packet-tracer')
+@click.option('--destination_ip', '-dip', default='0.0.0.0', prompt='Packet Destination Address',
+              help='Destination IP Address for packet-tracer')
+@click.option('--source_port', '-sp', default='32768',
+              help='Source Port for packet-tracer, default=32768')
+@click.option('--destination_port', '-dp', default='80',
+              help='Destination Port for packet-tracer, default=80 (http)')
+@click.option('--protocol', '-p', default='tcp', type=click.Choice(['rawip', 'icmp', 'udp',
+              'tcp']), help='Protocol for packet-tracer, default=tcp')
+@click.option('--ingress_interface', '-I', default=None,
+              help='Ingress interface for packet-tracer, default to dynamic lookup '
+                   'via ASA routing table.')
+@click.pass_context
+def ptrace(ctx, source_ip, destination_ip, source_port, destination_port, protocol, ingress_interface):
+    '''Leverage ASA's packet-tracer command and routes to summarize policy applied
+       to a packet transiting the ASA.'''
+    # Populate Asa interfaces and routes
+    asa = ctx.obj['asa']
+    asa.populate()
+    res = asa.ptrace(src_ip=source_ip, dst_ip=destination_ip, src_port=source_port,
+                     dst_port=destination_port, proto=protocol, ingress_int=ingress_interface,
+                     override=False, verbose=ctx.obj['debug'])
+    # print(res)  # Currently printed in method as side effect instead of being returned...
+
+
+@cli.command()
+## @click.option('--command', '-c', help='command(s) to run on ASA (separated by ;)')
+@click.argument('commands')
+@click.pass_context
+def cmd(ctx, commands):
+    '''Send one or more commands (; delimited) to ASA and display results.
+       From a shell will need to supply command(s) in quotes, e.g., "show version"'''
+    asa = ctx.obj['asa']
+    res = asa.send_cmds(commands, verbose=ctx.obj['debug'])
+
+    # Multiple commands?
+    if isinstance(res, OrderedDict):
+        for k, v in res.items():
+            # Desired length - length of command + length of existing string below
+            l = 75 - len(k) + 16
+            print('/-----<{}>-{}-\\'.format(k, ('-' * l)))
+            print(v, end='')
+            print('\\-----</{}>-{}-/\n'.format(k, ('-' * (l - 1))))
+    else:
+        print(res)
+
+
 if __name__ == '__main__':
     # main(display=True)
-    test()
+    # test()
+    cli()
 
