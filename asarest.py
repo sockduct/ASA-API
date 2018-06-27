@@ -1,9 +1,9 @@
-#!/usr/bin/env python2.7-32
+#!/usr/bin/env python
 '''Asa - class to facilitate interaction with Cisco ASA via its REST API'''
+# Supported in Python v2.7 and 3.5+
 ###################################################################################################
 # To do:
 # * Packet-trace interpretation
-#   * Look into ssh key-based authentication
 #   * Show matched policies (e.g., in order of interest:
 #     NAT, INSPECT, WCCP-Redirect, (dynamic vs. static?) Shun, BTF, IPS-Module,
 #     QoS, Flow-Export, User-Stats, Logged, Others?
@@ -31,7 +31,6 @@
 # * Finish methods - delete, put, patch
 # * Consider separating ASA REST interface and packet-tracer interpretation functionality
 #   into separate modules
-# * Migrate to Python 3.x?
 # * Add regexp search for interfaces and routes
 # * Add IPv6 support
 ###################################################################################################
@@ -52,10 +51,17 @@ from __future__ import print_function
 
 # stdlib
 from collections import OrderedDict
-import HTMLParser # 2.x only (3.x = html.parser)
+from pprint import pprint
 import random
 import sys
 from xml.etree import ElementTree
+
+# stdlib conditional on Python version
+if sys.version_info.major == 2:
+    import HTMLParser as html_parser
+# Renamed in 3.x
+else:
+    import html.parser as html_parser
 
 # 3rd party
 import click
@@ -67,7 +73,7 @@ import win_inet_pton    # Must be imported before radix in Windows
                         # import even in v3.4+
 import radix            # Note:  pip install py-radix
 import requests
-from requests.exceptions import ConnectTimeout
+from requests.exceptions import ConnectTimeout, ReadTimeout
 
 
 # Globals
@@ -107,7 +113,11 @@ class Asa(object):
                     self.data['interfaces']['physical']['count'], self.data['interfaces'][
                         'logical']['count'], self.data['interfaces']['vlan']['count']))
 
-    def get(self, resource, verbose=False):
+    def get(self, resource, params=None, verbose=False):
+        '''ASA REST API - GET:  retrieve data from specified object
+           Requires user with privilege level 5 or higher
+           Requires user with privilege level 3 or greater for monitoring
+           commands (i.e., /api/monitoring/*)'''
         # headers = {'user-agent': 'my-app/0.0.1'}
         # resp = requests.get('https://' + ASA + '/api/' + resource, headers=headers)
 
@@ -116,7 +126,10 @@ class Asa(object):
 
         # Note - ASA returns up to 100 records per query
         data_loc = 0  # Current range of data (i.e., 0-99)
-        get_payload = {'offset': 0}
+        if params:
+            get_payload.update({'offset': 0})
+        else:
+            get_payload = {'offset': 0}
         retries = 0
 
         while True:
@@ -149,37 +162,44 @@ class Asa(object):
                 else:
                     resp_data['items'].extend(resp_dict['items'])
 
-                start = resp_dict['rangeInfo']['offset']
-                end = start + resp_dict['rangeInfo']['limit'] - 1
-                total = resp_dict['rangeInfo']['total']
-                # print('Retrieved items {}-{} out of {}...'.format(start, end, total))
+                if resp_dict.get('rangeInfo'):
+                    start = resp_dict['rangeInfo']['offset']
+                    end = start + resp_dict['rangeInfo']['limit'] - 1
+                    total = resp_dict['rangeInfo']['total']
+                    if verbose:
+                        print('Retrieved items {}-{} out of {}...'.format(start, end, total))
 
-                data_loc += 100
-                # We have everything
-                if data_loc >= resp_data['rangeInfo']['total']:
-                    return resp_data
-                # Don't have everything, get the next range
+                    data_loc += 100
+                    # We have everything
+                    if data_loc >= resp_data['rangeInfo']['total']:
+                        return resp_data
+                    # Don't have everything, get the next range
+                    else:
+                        get_payload['offset'] = data_loc
                 else:
-                    get_payload['offset'] = data_loc
+                    return resp_data
             else:
                 resp.raise_for_status()
 
     def post(self, resource, payload, verbose=False):
+        '''ASA REST API - POST:  create object with supplied information
+           Requires user with privilege level 15'''
         retries = 0
 
         while True:
             try:
                 if verbose:
-                    print('Attempting post connection to ASA...')
+                    print('Attempting post connection to ASA as {}...'.format(self.user))
                 resp = requests.post('https://' + self.mgmt + '/api/' + resource,
                                     auth=(self.user, self.passwd),
                                     timeout=self.timeout, verify=self.verify,
                                     json=payload)
-            except ConnectTimeout:
+            except (ConnectTimeout, ReadTimeout) as err:
                 retries += 1
                 if verbose:
                     print('post connection timed out/failed to complete within timeout '
-                          'period ({}s) - retry # {}...'.format(self.timeout, retries))
+                          'period ({}s/{}) - retry # {}...'.format(self.timeout,
+                                                               err.__class__, retries))
                 if retries <= RETRY:
                     continue
                 else:
@@ -188,7 +208,17 @@ class Asa(object):
             else:
                 break
 
-        if resp.ok:
+        if resp.status_code in [200, 201, 204, 400, 403]:
+            if resp.status_code == 400:
+                print('Warning:  Asa.post:  ASA states request is bad (400).  Did you mistype '
+                      'something?')
+            elif resp.status_code == 403:
+                print('Warning:  Asa.post:  ASA states request not authorized (403).  Do you '
+                      'have sufficient privileges?')
+
+            if verbose:
+                print('Debug:  Asa.post:  Response status code is {}'.format(resp.status_code))
+
             # Get JSON data
             resp_dict = resp.json()
 
@@ -196,32 +226,44 @@ class Asa(object):
         else:
             resp.raise_for_status()
 
-    # Comment these out until implemented
-    '''
     def delete(self, resource):
-        pass
+        '''ASA REST API - DELETE:  deletes specified object
+           Requires user with privilege level 15'''
+        raise(NotImplementedError)
 
     def put(self, resource):
-        pass
+        '''ASA REST API - PUT:  add supplied information to specified object
+           Returns 404 (resource not found) error if object does not exist
+           Requires user with privilege level 15'''
+        raise(NotImplementedError)
 
     def patch(self, resource):
-        pass
-    '''
+        '''ASA REST API - PATCH:  applies partial modifications to specified object'''
+        raise(NotImplementedError)
 
     # Need to deal with errors - if get 400, output error instead of dying...
     def send_cmds(self, cmds, verbose=False):
         cmd_array = [c.strip() for c in cmds.split(';')]
+        # Remove empty strings, use list for 3.x to iterate iterable
+        cmd_array = list(filter(None, cmd_array))
         if verbose:
             print('Asa.send_cmds/parsed out:  {}'.format(cmd_array))
 
         payload = {'commands': cmd_array}
-        res = self.post('cli', payload, verbose=False)
-        output = res['response']
+        res = self.post('cli', payload, verbose)
+        error = res.get('messages')
+        if error:
+            sys.exit('Error:  Asa.send_cmds:  Level={}, Code={}, Details:  {}'.format(
+                     error[0]['level'], error[0]['code'], error[0]['details']))
+        output = res.get('response')
         if verbose:
             print('Asa.send_cmds/received response of {} element(s)'.format(len(output)))
 
+        # If no command/response output:
+        if len(output) == 0:
+            return '-->Empty response<--'
         # If a single command/response, return raw output
-        if len(output) == 1:
+        elif len(output) == 1:
             return output[0]
         # Otherwise return list
         else:
@@ -357,7 +399,7 @@ class Asa(object):
             rnode.data['via'] = rtype
 
     # Load Asa interfaces and routes
-    def populate(self):
+    def populate(self, verbose=False):
         # Note - this may be incomplete - better to move this to populate_ints and have it
         # dynamically discover all available interface types and interfaces
         resources = ['interfaces/physical', 'interfaces/vlan', 'routing/static']
@@ -365,7 +407,7 @@ class Asa(object):
         for resource in resources:
             # Strip off leading part and slash:
             rc = resource[resource.find('/') + 1:]
-            resp = self.get(resource, verbose=False)
+            resp = self.get(resource, verbose)
             if resp:
                 if resource == 'interfaces/physical':
                     self.populate_ints(resp, rc)
@@ -493,7 +535,7 @@ class Asa(object):
             sys.exit('Error: {} input as protocol, ASA only accepts {}.'.format(proto,
                         valid_protos))
 
-        if src_port < 0:
+        if not src_port or src_port < 0:
             # Default Windows ephemeral port range, also acceptable range for other OS
             src_port = Asa.rng.randint(49152, 65535)
 
@@ -504,10 +546,8 @@ class Asa(object):
         res = self.send_cmds(ptcmd)
 
         # "Decode" HTML Character Entity References
-        html_parser = HTMLParser.HTMLParser()
-        # 3.x:
-        # html_parser = html.parser.HTMLParser()
-        decoded = html_parser.unescape(res)
+        hparser = html_parser.HTMLParser()
+        decoded = hparser.unescape(res)
 
         # Invalid XML - repeated elements without a root, fix:
         decoded = '<ASA-PT>\n' + decoded + '</ASA-PT>\n'
@@ -712,7 +752,7 @@ def main(display=False):
     for resource in resources:
         # Strip off leading part and slash:
         rc = resource[resource.find('/') + 1:]
-        resp = asa.get(resource, verbose=True)
+        resp = asa.get(resource)
         if resp:
             if resource == 'interfaces/physical':
                 asa.populate_ints(resp, rc)
@@ -746,7 +786,7 @@ def cli(ctx, interface, username, password, debug):
     '''CLI tool to interact with Cisco ASA via its REST API.'''
     # Initialize Asa instance and its management interface (how to connect to
     # its API endpoint)
-    asa = Asa(mgmt=interface)
+    asa = Asa(mgmt=interface, user=username, passwd=password)
 
     # Populate context object:
     ctx.obj = {'asa': asa}
@@ -760,8 +800,8 @@ def cli(ctx, interface, username, password, debug):
               help='Source IP Address for packet-tracer')
 @click.option('--destination_ip', '-dip', default='0.0.0.0', prompt='Packet Destination Address',
               help='Destination IP Address for packet-tracer')
-@click.option('--source_port', '-sp', default='32768',
-              help='Source Port for packet-tracer, default=32768')
+@click.option('--source_port', '-sp',
+              help='Source Port for packet-tracer, default=random-high-port')
 @click.option('--destination_port', '-dp', default='80',
               help='Destination Port for packet-tracer, default=80 (http)')
 @click.option('--protocol', '-p', default='tcp', type=click.Choice(['rawip', 'icmp', 'udp',
@@ -783,7 +823,6 @@ def ptrace(ctx, source_ip, destination_ip, source_port, destination_port, protoc
 
 
 @cli.command()
-## @click.option('--command', '-c', help='command(s) to run on ASA (separated by ;)')
 @click.argument('commands')
 @click.pass_context
 def cmd(ctx, commands):
@@ -802,6 +841,23 @@ def cmd(ctx, commands):
             print('\\-----</{}>-{}-/\n'.format(k, ('-' * (l - 1))))
     else:
         print(res)
+
+
+@cli.command()
+@click.option('--method', '-m', default='GET', help='HTTP method '
+              '[GET|POST|PUT|PATCH|DELETE]')
+@click.argument('apiresource')
+@click.option('--params', '-pa', help='HTTP query parameter(s) for API resource')
+@click.pass_context
+def apires(ctx, method, apiresource, params):
+    '''Interaction with API Resource using specified HTTP method (default = GET).
+       APIResource is the URL part following /api/, e.g., monitoring/apistats
+       Optionally include query parameter(s).'''
+    asa = ctx.obj['asa']
+    method = method.lower()
+    res = getattr(asa, method)(apiresource, params=params, verbose=ctx.obj['debug'])
+
+    pprint(res)
 
 
 if __name__ == '__main__':
