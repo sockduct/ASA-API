@@ -3,6 +3,12 @@
 # Supported in Python v2.7 and 3.5+
 ###################################################################################################
 # To do:
+# * Add support for Bulk API
+# * Support getting authentication token vs. username/password auth
+# * Benchmark requests using user/password vs. token-based authentication
+# * Finish methods - delete, put, patch
+# * Make sure API-based get requests can process more than 100 items
+# * Add support for "legacy" HTTP interface used by ASDM
 # * Packet-trace interpretation
 #   * Show matched policies (e.g., in order of interest:
 #     NAT, INSPECT, WCCP-Redirect, (dynamic vs. static?) Shun, BTF, IPS-Module,
@@ -15,25 +21,63 @@
 #   * Allow input of service names
 #   * Make service name input easier
 #   * Should etree be stored in the class/instance?
-# * Create CLI version of this using click to support paging
-# * Support ICMP Type/Code options
+#   * Support ICMP Type/Code options
 # * populate_ints only supports physical and vlan types, improve to check for all interface
 #   types (bvi, ethernet, firepower, portchannel, redundant, setup), should also check if
 #   in single or multi mode as the latter requires a different API
 # * Check if physical (and VLAN) interface is up/up - if not, account for so prefix not used
-# * Support getting authentication token vs. username/password auth
-# * g
 # * Consider re-factoring
 #   * Base supports HTTP verbs and auth
 #   * Separate class which inherits base and adds retrieval type info
 #   * Separate class which inherits base and adds display/output options
 #   * Asa clas which inherits all the above
-# * Finish methods - delete, put, patch
 # * Consider separating ASA REST interface and packet-tracer interpretation functionality
 #   into separate modules
 # * Add regexp search for interfaces and routes
 # * Add IPv6 support
 ###################################################################################################
+
+###################################################################################################
+# Cisco ASA RESTful API, Supported Methods (request body in JSON format):
+# * GET - Retrieve data from specified object (no request body)
+# * PUT - Adds supplied information to specified object (update/replace/modify *existing*
+#         resource); If object doesn't exist, returns a 404 Resource Not Found error
+# * POST - Creates (new) object with supplied information
+# * DELETE - Removes specified object (no request body)
+# * PATCH - Applies partial modifications to specified object
+#==================================================================================================
+# RESTful Responses:
+# Location Header - newly created resource ID, for POST only holds the new resource ID as URI
+# HTTP Status Codes:
+# * 20x - A two-hundred series code indicates successful operation, including:
+#   * 200 OK - Standard response for successful (GET) requests
+#   * 201 Created - Request completed; new resource created (POST)
+#   * 202 Accepted - Request accepted, but processing not complete
+#   * 204 No Content - Server successfully processed request; no content is being returned
+#         (PUT|PATCH|DELETE)
+# * 4xx - A four-hundred series code indicates a client-side error, including:
+#   * 400 Bad Request - Invalid query parameters, including unrecognized parameters, missing
+#         parameters, or invalid values
+#   * 401 Unauthorized - Invalid credentials supplied to perform requested operation
+#   * 403 Forbidden - User has insufficient privileges to perform requested operation
+#   * 404 Not Found - The provided URL does not match an existing resource. e.g, an HTTP DELETE
+#         may fail because the resource is unavailable
+#   * 405 Method not Allowed - An HTTP request was presented that is not allowed on the resource;
+#         e.g., a POST on a read-only resource
+# * 5xx - A five-hundred series code indicates a server-side error
+#   * 500 Server Error - A catch-all for any other failure, this should be the last choice when
+#         no other response code makes sense
+#   * 503 Service Unavailable - Exceeded maximum session limit for authentication tokens
+# Additional error/diagnostic information:
+# * In the case of an error, the return response may inclulde a list of one or more dicts each
+#   with:  code: Error/Warning/Info_code-as-string, details: Detailed_message_corresponding_to_
+#          error/warning/info_code-as-string, context: <attribute-name>,
+#          level: "Error" or "Warning" or "Info" as-string
+#==================================================================================================
+# Notes:
+# * ASA RESTful API documentation portal:  https://<ASA-Mgmt-Address>/doc/
+# * Changes via RESTful API non-persistent, to save you can POST a writemem API request
+#==================================================================================================
 # packet-tracer functionality/options v9.4.4.13:
 # packet-tracer input <nameif> <icmp>|<rawip>|<tcp>|<udp> [inline-tag <#>]
 #     <srcip>|[fqdn <strsrc>]|[security-group [name <str>]|[tag <#>]|[user [<domain>\]<user>]
@@ -45,13 +89,15 @@
 #     [detailed] [xml]
 ###################################################################################################
 
+# Python 2.x/3.x compatibility:
 from __future__ import print_function
-# Removed to make click happy!
+# Removed to make click happy, but this results in a disparity between 2.x and
+# 3.x strings:
 # from __future__ import unicode_literals
 
 # stdlib
 from collections import OrderedDict
-from pprint import pprint
+import pprint
 import random
 import sys
 from xml.etree import ElementTree
@@ -88,6 +134,7 @@ VERIFY = False  # Validate X.509 Certificate? Typically self-signed so default t
 requests.packages.urllib3.disable_warnings()
 
 
+# Inherit from object for 2.x/3.x compatibility (always use new-style classes)
 class Asa(object):
     # Keep in the class to facilitate thread safety
     rng = random.SystemRandom()
@@ -113,11 +160,11 @@ class Asa(object):
                     self.data['interfaces']['physical']['count'], self.data['interfaces'][
                         'logical']['count'], self.data['interfaces']['vlan']['count']))
 
-    def get(self, resource, params=None, verbose=False):
+    def get(self, resource, params=None, verbose=False, *args, **kwargs):
         '''ASA REST API - GET:  retrieve data from specified object
-           Requires user with privilege level 5 or higher
-           Requires user with privilege level 3 or greater for monitoring
-           commands (i.e., /api/monitoring/*)'''
+           Requires user with privilege level 3 or greater for /api/monitoring/*
+           Requires user with privilege level 5 or higher for /api/*'''
+        # Note:  Additional arguments (args/kwargs) are ignored - e.g., if body=... passed
         # headers = {'user-agent': 'my-app/0.0.1'}
         # resp = requests.get('https://' + ASA + '/api/' + resource, headers=headers)
 
@@ -178,6 +225,19 @@ class Asa(object):
                         get_payload['offset'] = data_loc
                 else:
                     return resp_data
+            elif resp.status_code == 400:
+                sys.exit('Error:  Asa.get:  ASA states request is bad (400).  Please '
+                         'check the supplied arguments and make sure the API path is '
+                         'valid (include the part after "/api/":  Good - "monitoring/'
+                         'arp", Bad - "api/monitoring/arp" or "/monitoring/arp"), '
+                         'check that any additional arguments are correctly formatted.')
+            elif resp.status_code == 401:
+                sys.exit('Error:  Asa.get:  ASA states invalid user credentials supplied'
+                         ' for requested operation (401).  Did you enter the wrong '
+                         'username and/or password?')
+            elif resp.status_code == 403:
+                sys.exit('Error:  Asa.get:  ASA states user credentials have insufficient'
+                         ' privileges for requested operation (403).')
             else:
                 resp.raise_for_status()
 
@@ -848,16 +908,25 @@ def cmd(ctx, commands):
               '[GET|POST|PUT|PATCH|DELETE]')
 @click.argument('apiresource')
 @click.option('--params', '-pa', help='HTTP query parameter(s) for API resource')
+@click.option('--body', '-b', help='HTTP request body in JSON format (POST/PUT/PATCH only)')
 @click.pass_context
-def apires(ctx, method, apiresource, params):
+def apires(ctx, method, apiresource, params, body):
     '''Interaction with API Resource using specified HTTP method (default = GET).
        APIResource is the URL part following /api/, e.g., monitoring/apistats
        Optionally include query parameter(s).'''
     asa = ctx.obj['asa']
     method = method.lower()
-    res = getattr(asa, method)(apiresource, params=params, verbose=ctx.obj['debug'])
+    if (method == 'get' or method == 'delete') and body:
+        sys.exit('Error:  GET/DELETE methods do not support a request body!')
+    elif method not in ['get', 'post', 'put', 'patch', 'delete']:
+        sys.exit('Error:  Supported methods are GET, POST, PUT, PATCH, DELETE.')
+    else:
+        res = getattr(asa, method)(apiresource, params=params, body=body, verbose=ctx.obj['debug'])
 
-    pprint(res)
+    # Nicely format JSON output
+    fres = pprint.pformat(res)
+    # Use click to page through results
+    click.echo_via_pager(fres)
 
 
 if __name__ == '__main__':
