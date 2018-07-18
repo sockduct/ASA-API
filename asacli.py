@@ -1,14 +1,16 @@
 #!/usr/bin/env python
-'''Asa - class to facilitate interaction with Cisco ASA via RESTful API'''
+'''ASA CLI - facilitate interaction with Cisco ASA via RESTful API'''
 # Supported in Python v2.7 and 3.5+
 ###################################################################################################
 # To do:
+# * Add support for Undocumented Java RESTful API used by ASDM (WIP)
+#   * Important because official REST API doesn't support CLI commands unless user privilege
+#     level is 15 (because commands sent to API using POST, POST requires level 15)
 # * Add support for Bulk API
 # * Support getting authentication token vs. username/password auth
 # * Benchmark requests using user/password vs. token-based authentication
 # * Finish methods - delete, put, patch
 # * Make sure API-based get requests can process more than 100 items
-# * Add support for "legacy" HTTP interface used by ASDM
 # * Packet-trace interpretation
 #   * Show matched policies (e.g., in order of interest:
 #     NAT, INSPECT, WCCP-Redirect, (dynamic vs. static?) Shun, BTF, IPS-Module,

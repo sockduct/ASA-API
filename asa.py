@@ -50,6 +50,8 @@ from requests.exceptions import ConnectTimeout, ReadTimeout
 
 # Package
 from asarest import AsaRestApi
+# Alternatively
+# from asajrest import AsaJRestApi
 
 # Globals
 RETRY = 2
@@ -60,7 +62,7 @@ VERIFY = False  # Validate X.509 Certificate? Typically self-signed so default t
 requests.packages.urllib3.disable_warnings()
 
 
-# Inherit from object for 2.x/3.x compatibility (always use new-style classes)
+# Inherit from selected ASA RESTful API provider, either AsaRestApi or AsaJRestApi:
 class Asa(AsaRestApi):
     # Keep in the class to facilitate thread safety
     rng = random.SystemRandom()
