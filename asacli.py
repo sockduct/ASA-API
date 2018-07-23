@@ -47,7 +47,42 @@ import sys
 import click
 
 # Package
-from asa import Asa
+from asabase import AsaBase
+from asarest import AsaRestApi
+from asajrest import AsaJRestApi
+
+
+# Use new-style class for interop across 2.x/3.x
+class Asa(object):
+    '''Proxy class to instantiate Asa with correct "backend provider"/superclass'''
+    class __SRAProxy(AsaBase, AsaRestApi):
+        '''ASA based on published Standard REST API'''
+        def __init__(self, *args, **kwargs):
+            AsaBase.__init__(self, *args, **kwargs)
+
+    '''Proxy class to instantiate Asa with correct "backend provider"/superclass'''
+    class __JRAProxy(AsaBase, AsaJRestApi):
+        '''ASA based on unpublished Java RESTful API'''
+        def __init__(self, *args, **kwargs):
+            AsaBase.__init__(self, *args, **kwargs)
+
+    def __init__(self, provider='rest', *args, **kwargs):
+        if provider == 'rest':
+            # Proxy object to hold correct interface
+            self.__proxy = Asa.__SRAProxy(*args, **kwargs)
+        elif provider == 'jrest':
+            # Proxy object to hold correct interface
+            self.__proxy = Asa.__JRAProxy(*args, **kwargs)
+        else:
+            sys.exit('Error:  Unknown provider "{}" requested.'.format(provider))
+
+    # Required for delegation of implicit calls to built-ins for new-style classes
+    def __repr__(self):
+        return repr(self.__proxy)
+
+    # Delegate attribute access to correct proxy class instance
+    def __getattr__(self, attr):
+        return getattr(self.__proxy, attr)
 
 
 def test():
@@ -64,7 +99,7 @@ def test():
        * Various drops
 
        Example Test Run:
-       asa = asarest.main()
+       asa = asacli.replinst()
        asa.ptrace('172.16.1.1', '8.8.8.8') --> Allow
        asa.ptrace('172.16.2.3', '128.102.3.230') --> Drop
        asa.ptrace('191.96.249.11', '12.40.205.159') --> Drop
@@ -74,15 +109,16 @@ def test():
        Debug:
        asa.ptrace('172.16.2.4', '8.8.8.8', show='full') --> Full packet-tracer output
     '''
-    asa = main()
+    asa = replinst()
     ## res = asa.get_ptrace('172.16.1.1', '8.8.8.8')
     ## asa.print_ptrace(res)
     ## asa.show_ptrace(res)
 
 
-def main(display=False):
+def replinst(provider='rest', mgmt='198.51.100.164', user='cisco', passwd='cisco', verbose=False):
+    '''Create an ASA instance for a REPL-like seession'''
     resources = ['interfaces/physical', 'interfaces/vlan', 'routing/static']
-    asa = Asa()
+    asa = Asa(provider='rest', mgmt=mgmt, user=user, passwd=passwd)
 
     print('Processing Cisco ASA ({})...'.format(asa.mgmt))
     for resource in resources:
@@ -92,15 +128,15 @@ def main(display=False):
         if resp:
             if resource == 'interfaces/physical':
                 asa.populate_ints(resp, rc)
-                if display:
+                if verbose:
                     asa.print_ints(rc)
             elif resource == 'interfaces/vlan':
                 asa.populate_ints(resp, rc)
-                if display:
+                if verbose:
                     asa.print_ints(rc)
             elif resource == 'routing/static':
                 asa.populate_routes(resp, rc)
-                if display:
+                if verbose:
                     asa.print_routes(rc)
             else:
                 sys.exit('Error:  resource "{}" not handled, aborting...'.format(resource))
@@ -111,6 +147,8 @@ def main(display=False):
 
 
 @click.group()
+@click.option('--provider', '-pv', default='rest', help='Default is "rest" - published REST API, '
+              'alternate is "jrest" - unpublished Java RESTful API used by ASDM')
 @click.option('--interface', '-i', default='0.0.0.0', prompt='ASA Management Interface IP Address',
               help='IP Address of ASA interface to connect to')
 @click.option('--username', '-u', prompt='Username', help='Username to authenticate to ASA')
@@ -118,11 +156,10 @@ def main(display=False):
               help='Password to authenticate to ASA')
 @click.option('--debug/--no-debug', default=False)
 @click.pass_context
-def cli(ctx, interface, username, password, debug):
+def cli(ctx, provider, interface, username, password, debug):
     '''CLI tool to interact with Cisco ASA via RESTful API.'''
-    # Initialize Asa instance and its management interface (how to connect to
-    # its API endpoint)
-    asa = Asa(mgmt=interface, user=username, passwd=password)
+    # Initialize Asa instance and its management interface (how to connect to its API endpoint)
+    asa = Asa(provider=provider, mgmt=interface, user=username, passwd=password)
 
     # Populate context object:
     ctx.obj = {'asa': asa}

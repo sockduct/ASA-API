@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-'''Asa - class to facilitate interaction with Cisco ASA via RESTful API'''
+'''AsaBase - class to facilitate interaction with Cisco ASA via RESTful API'''
 # Supported in Python v2.7 and 3.5+
 ###################################################################################################
 # To do:
@@ -48,11 +48,6 @@ import radix            # Note:  pip install py-radix
 import requests
 from requests.exceptions import ConnectTimeout, ReadTimeout
 
-# Package
-from asarest import AsaRestApi
-# Alternatively
-# from asajrest import AsaJRestApi
-
 # Globals
 RETRY = 2
 TIMEOUT = 3.0
@@ -62,8 +57,9 @@ VERIFY = False  # Validate X.509 Certificate? Typically self-signed so default t
 requests.packages.urllib3.disable_warnings()
 
 
-# Inherit from selected ASA RESTful API provider, either AsaRestApi or AsaJRestApi:
-class Asa(AsaRestApi):
+# Inherit from object for 2.x/3.x compatibility (always use new-style classes)
+# Incomplete - need to mixin either AsaRestApi or AsaJRestApi
+class AsaBase(object):
     # Keep in the class to facilitate thread safety
     rng = random.SystemRandom()
 
