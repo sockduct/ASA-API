@@ -68,6 +68,41 @@ from requests.exceptions import ConnectTimeout, ReadTimeout
 
 # Inherit from object for 2.x/3.x compatibility (always use new-style classes)
 class AsaJRestApi(object):
+    __header = {'User-Agent': 'ASDM/ Java/1.8.0_131'}
+
+    def _auth(self):
+        '''Check if current session is authenticated to ASA and if not then
+           authenticate.'''
+        payload = {'username': self.user, 'password': self.passwd, 'group_list': '', 'tgroup':
+                   'DefaultADMINGroup', 'Login': 'Login'}
+
+        # Check for session attribute
+        if 'sess' not in self.__dict__:
+            self.sess = None
+
+        # If session empty then setup
+        if self.sess is None:
+            self.sess = requests.Session()
+            self.sess.headers.update(AsaJRestApi.__header)
+            self.sess.verify = self.verify
+            # Timeout?
+
+            # Initial request
+            resp = self.sess.get('https://' + self.mgmt + '/admin/login_banner')
+
+            # Login
+            resp = self.sess.post('https://' + self.mgmt + '/+webvpn+/index.html', data=payload)
+            # Should have webvpn cookie now, appears to be auth token
+
+            # Remove webvpnlogin cookie
+            self.sess.cookies.pop('webvpnlogin')
+
+        # Check for session cookie:
+        if 'webvpn' in self.sess.cookies and self.sess.cookies['webvpn']:
+            return True
+        else:
+            return False
+
     def get(self, resource, params=None, verbose=False, *args, **kwargs):
         '''ASA Java REST API - GET:  retrieve data via specified URL'''
         pass
@@ -93,7 +128,23 @@ class AsaJRestApi(object):
     def send_cmds(self, cmds, verbose=False):
         '''Send one or more commands to ASA.  Some commands may have to use
            alternate POST interface but not clear which ones...'''
-        raise(NotImplementedError)
+        if not self._auth():
+            sys.exit('Problem authenticating to ASA')
+
+        cmd_array = [c.strip() for c in cmds.split(';')]
+        # Remove empty strings, use list for 3.x to iterate iterable
+        cmd_array = list(filter(None, cmd_array))
+        if verbose:
+            print('Asa.send_cmds/parsed out:  {}'.format(cmd_array))
+
+        cmd_array = [c.replace(' ', '+') for c in cmd_array]
+        url_suffix = '/' + '/'.join(cmd_array) + '/'
+
+        resp = self.sess.get('https://' + self.mgmt + '/admin/exec' + url_suffix)
+        # Error handling
+        # Parsing out responses?
+
+        return resp.text
 
     def populate_ints(self, resp_data, itype):
         '''Populate internal ASA interface table for use by other methods.'''

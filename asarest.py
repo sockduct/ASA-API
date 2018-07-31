@@ -157,9 +157,9 @@ class AsaRestApi(object):
                 if verbose:
                     print('Attempting post connection to ASA as {}...'.format(self.user))
                 resp = requests.post('https://' + self.mgmt + '/api/' + resource,
-                                    auth=(self.user, self.passwd),
-                                    timeout=self.timeout, verify=self.verify,
-                                    json=payload)
+                                     auth=(self.user, self.passwd),
+                                     timeout=self.timeout, verify=self.verify,
+                                     json=payload)
             except (ConnectTimeout, ReadTimeout) as err:
                 retries += 1
                 if verbose:

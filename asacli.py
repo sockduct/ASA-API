@@ -11,6 +11,7 @@
 # * Benchmark requests using user/password vs. token-based authentication
 # * Finish methods - delete, put, patch
 # * Make sure API-based get requests can process more than 100 items
+# * Get rid of prints and utilize logging module instead - see PyCon 2018 Preso on this
 # * Packet-trace interpretation
 #   * Show matched policies (e.g., in order of interest:
 #     NAT, INSPECT, WCCP-Redirect, (dynamic vs. static?) Shun, BTF, IPS-Module,
