@@ -63,10 +63,11 @@ class AsaBase(object):
     # Keep in the class to facilitate thread safety
     rng = random.SystemRandom()
 
-    def __init__(self, mgmt, user, passwd, timeout=TIMEOUT, verify=VERIFY):
+    def __init__(self, mgmt, user, passwd, retry=RETRY, timeout=TIMEOUT, verify=VERIFY):
         self.mgmt = mgmt
         self.user = user
         self.passwd = passwd
+        self.retry = retry
         self.timeout = timeout
         self.verify = verify
         self.data = {}
@@ -74,11 +75,11 @@ class AsaBase(object):
         self.ptrace_data = {}
 
     def __repr__(self):
-        return ('<Cisco ASA:  management address={}, username={}, timeout={}, validate '
-                'certificate={}>\n\t<{{data keys:  {}}}, {{radix tree size:  {} prefixes'
-                '}}>\n\t<{{data/routes/static:  {} prefixes ({} ipv4)}}>\n\t<{{data/'
+        return ('<Cisco ASA:  management address={}, username={}, retry={} timeout={}, '
+                'validate certificate={}>\n\t<{{data keys:  {}}}, {{radix tree size:  {} '
+                'prefixes}}>\n\t<{{data/routes/static:  {} prefixes ({} ipv4)}}>\n\t<{{data/'
                 'interfaces:  physical - {}, logical - {}, vlan - {}}}>'.format(self.mgmt,
-                    self.user, self.timeout, self.verify, self.data.keys(),
+                    self.user, self.retry, self.timeout, self.verify, self.data.keys(),
                     len(self.rtree.prefixes()), self.data['routes']['static']['count'],
                     len(self.data['routes']['static']['items']['ipv4']),
                     self.data['interfaces']['physical']['count'], self.data['interfaces'][
@@ -116,7 +117,7 @@ class AsaBase(object):
 
         if not src_port or src_port < 0:
             # Default Windows ephemeral port range, also acceptable range for other OS
-            src_port = Asa.rng.randint(49152, 65535)
+            src_port = AsaBase.rng.randint(49152, 65535)
 
         ptcmd = 'packet-tracer input {} {} {} {} {} {} detailed xml'.format(ingress_int,
                     proto, src_ip, src_port, dst_ip, dst_port)

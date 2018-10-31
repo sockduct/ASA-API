@@ -70,7 +70,7 @@ from requests.exceptions import ConnectTimeout, ReadTimeout
 class AsaJRestApi(object):
     __header = {'User-Agent': 'ASDM/ Java/1.8.0_131'}
 
-    def _auth(self):
+    def _auth(self, verbose=False):
         '''Check if current session is authenticated to ASA and if not then
            authenticate.'''
         payload = {'username': self.user, 'password': self.passwd, 'group_list': '', 'tgroup':
@@ -85,23 +85,68 @@ class AsaJRestApi(object):
             self.sess = requests.Session()
             self.sess.headers.update(AsaJRestApi.__header)
             self.sess.verify = self.verify
-            # Timeout?
 
-            # Initial request
-            resp = self.sess.get('https://' + self.mgmt + '/admin/login_banner')
+            retries = 0
+            while True:
+                # Initial request
+                try:
+                    resp = self.sess.get('https://' + self.mgmt + '/admin/login_banner',
+                                         timeout=self.timeout)
+                    # Debug
+                    if verbose:
+                        print('AsaJRestAPI._auth.resp after GET /admin/login_banner:\n'
+                              '{}'.format(resp.__dict__))
+                        print('\nresp.text (length={}):\n{}'.format(len(resp.text), resp.text))
 
-            # Login
-            resp = self.sess.post('https://' + self.mgmt + '/+webvpn+/index.html', data=payload)
-            # Should have webvpn cookie now, appears to be auth token
+                    # Check if resp.content length is 0
+                    if len(resp.text) > 0:
+                        # Login
+                        resp = self.sess.post('https://' + self.mgmt + '/+webvpn+/index.html',
+                                              data=payload, timeout=self.timeout)
+                        # Debug
+                        if verbose:
+                            print('AsaJRestAPI._auth.resp after POST:\n{}'.format(resp.__dict__))
+                        # Should have webvpn cookie now, appears to be auth token
 
-            # Remove webvpnlogin cookie
-            self.sess.cookies.pop('webvpnlogin')
+                        # Remove webvpnlogin cookie
+                        self.sess.cookies.pop('webvpnlogin')
 
-        # Check for session cookie:
-        if 'webvpn' in self.sess.cookies and self.sess.cookies['webvpn']:
-            return True
+                        # Check for session cookie:
+                        if 'webvpn' in self.sess.cookies and self.sess.cookies['webvpn']:
+                            return True
+                        else:
+                            return False
+                    # Plan B
+                    else:
+                        self.sess.auth=(self.user, self.passwd)
+                        resp = self.sess.get('https://' + self.mgmt + '/admin/version.prop',
+                                             timeout=self.timeout, auth=(self.user, self.passwd))
+                        # Debug
+                        if verbose:
+                            print('AsaJRestAPI._auth.resp after GET /admin/version.prop:\n'
+                                  '{}'.format(resp.__dict__))
+
+                        if resp.ok:
+                            return True
+                except ConnectTimeout:
+                    retries += 1
+                    if verbose:
+                        print('auth connection timed out/failed to complete within timeout '
+                              'period ({}s) - retry # {}...'.format(self.timeout, retries))
+                    if retries <= self.retry:
+                        continue
+                    else:
+                        sys.exit('Error:  Exceeded maximum number of retries ({}) for get'
+                                 ' - giving up.'.format(self.retry))
+
+                if not resp.ok:
+                    resp.raise_for_status()
+                else:
+                    return False
+        # If session populated, assume valid
         else:
-            return False
+            return True
+
 
     def get(self, resource, params=None, verbose=False, *args, **kwargs):
         '''ASA Java REST API - GET:  retrieve data via specified URL'''
@@ -128,7 +173,7 @@ class AsaJRestApi(object):
     def send_cmds(self, cmds, verbose=False):
         '''Send one or more commands to ASA.  Some commands may have to use
            alternate POST interface but not clear which ones...'''
-        if not self._auth():
+        if not self._auth(verbose):
             sys.exit('Problem authenticating to ASA')
 
         cmd_array = [c.strip() for c in cmds.split(';')]

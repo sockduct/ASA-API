@@ -41,6 +41,7 @@ from __future__ import print_function
 
 # stdlib
 from collections import OrderedDict
+import json
 import pprint
 import sys
 
@@ -116,34 +117,10 @@ def test():
     ## asa.show_ptrace(res)
 
 
-def replinst(provider='rest', mgmt='198.51.100.164', user='cisco', passwd='cisco', verbose=False):
+def replinst(provider='rest', interface='198.51.100.164', username='cisco', password='cisco', verbose=True):
     '''Create an ASA instance for a REPL-like seession'''
-    resources = ['interfaces/physical', 'interfaces/vlan', 'routing/static']
-    asa = Asa(provider='rest', mgmt=mgmt, user=user, passwd=passwd)
-
-    print('Processing Cisco ASA ({})...'.format(asa.mgmt))
-    for resource in resources:
-        # Strip off leading part and slash:
-        rc = resource[resource.find('/') + 1:]
-        resp = asa.get(resource)
-        if resp:
-            if resource == 'interfaces/physical':
-                asa.populate_ints(resp, rc)
-                if verbose:
-                    asa.print_ints(rc)
-            elif resource == 'interfaces/vlan':
-                asa.populate_ints(resp, rc)
-                if verbose:
-                    asa.print_ints(rc)
-            elif resource == 'routing/static':
-                asa.populate_routes(resp, rc)
-                if verbose:
-                    asa.print_routes(rc)
-            else:
-                sys.exit('Error:  resource "{}" not handled, aborting...'.format(resource))
-        else:
-            sys.exit('Error:  Didn\'t get response from ASA, aborting...')
-
+    asa = Asa(provider='rest', mgmt=interface, user=username, passwd=password)
+    asa.populate(verbose=verbose)
     return asa
 
 
@@ -153,7 +130,7 @@ def replinst(provider='rest', mgmt='198.51.100.164', user='cisco', passwd='cisco
 @click.option('--interface', '-i', default='0.0.0.0', prompt='ASA Management Interface IP Address',
               help='IP Address of ASA interface to connect to')
 @click.option('--username', '-u', prompt='Username', help='Username to authenticate to ASA')
-@click.option('--password', '-pw', prompt='Password', hide_input=True,
+@click.option('--password', '-pw', prompt='Password', envvar='FWPW', hide_input=True,
               help='Password to authenticate to ASA')
 @click.option('--debug/--no-debug', default=False)
 @click.pass_context
@@ -217,12 +194,24 @@ def cmd(ctx, commands):
         print(res)
 
 
+# Probably best option for now to deal with loading JSON is from environment
+# variable or file - Not sure how to do from CLI using click...
+# Even when use sys.argv, appears Python strips off quotes
+#
+# In Windows, pass body as follows (PowerShell):
+# -b "`"{'commands': ['show firewall']}`""
+# Note:  In PowerShell, the backquote is the escape character
+#
+# This allows click to deal with extra/unknown options, but probably not what I want:
+# @cli.command(context_settings=dict(ignore_unknown_options=True, allow_extra_args=True))
 @cli.command()
 @click.option('--method', '-m', default='GET', help='HTTP method '
               '[GET|POST|PUT|PATCH|DELETE]')
 @click.argument('apiresource')
 @click.option('--params', '-pa', help='HTTP query parameter(s) for API resource')
 @click.option('--body', '-b', help='HTTP request body in JSON format (POST/PUT/PATCH only)')
+              # , type=click.UNPROCESSED)  # Don't process, but doesn't seem to do what I
+              # want...
 @click.pass_context
 def apires(ctx, method, apiresource, params, body):
     '''Interaction with API Resource using specified HTTP method (default = GET).
@@ -230,12 +219,24 @@ def apires(ctx, method, apiresource, params, body):
        Optionally include query parameter(s).'''
     asa = ctx.obj['asa']
     method = method.lower()
+    jbody = json.loads(body.replace("'", '"'))
+    # Add extra args into JSON body:
+    '''
+    if len(ctx.args) >= 1:
+        print('-->Found extra args ({}) - appending to body<--'.format(ctx.args))
+        jbody = body + ' '.join(ctx.args)
+        # jbody = json.loads(body + ' '.join(ctx.args))
+        print('-->jbody:  {}<--'.format(jbody))
+    '''
     if (method == 'get' or method == 'delete') and body:
         sys.exit('Error:  GET/DELETE methods do not support a request body!')
     elif method not in ['get', 'post', 'put', 'patch', 'delete']:
         sys.exit('Error:  Supported methods are GET, POST, PUT, PATCH, DELETE.')
     else:
-        res = getattr(asa, method)(apiresource, params=params, body=body, verbose=ctx.obj['debug'])
+        ### Temp debug ###
+        print('-->Received:  method={}, apiresource={}, params={}, jbody={}, verbose={}'
+              '<--'.format(method, apiresource, params, body, ctx.obj['debug']))
+        res = getattr(asa, method)(apiresource, payload=jbody, params=params, verbose=ctx.obj['debug'])
 
     # Nicely format JSON output
     fres = pprint.pformat(res)

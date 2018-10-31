@@ -98,11 +98,11 @@ class AsaRestApi(object):
                 if verbose:
                     print('get connection timed out/failed to complete within timeout '
                           'period ({}s) - retry # {}...'.format(self.timeout, retries))
-                if retries <= RETRY:
+                if retries <= self.retry:
                     continue
                 else:
                     sys.exit('Error:  Exceeded maximum number of retries ({}) for get'
-                             ' - giving up.'.format(RETRY))
+                             ' - giving up.'.format(self.retry))
 
             if resp.ok:
                 # Get JSON data
@@ -147,7 +147,7 @@ class AsaRestApi(object):
             else:
                 resp.raise_for_status()
 
-    def post(self, resource, payload, verbose=False):
+    def post(self, resource, payload, params=None, verbose=False):
         '''ASA REST API - POST:  create object with supplied information
            Requires user with privilege level 15'''
         retries = 0
@@ -166,11 +166,11 @@ class AsaRestApi(object):
                     print('post connection timed out/failed to complete within timeout '
                           'period ({}s/{}) - retry # {}...'.format(self.timeout,
                                                                err.__class__, retries))
-                if retries <= RETRY:
+                if retries <= self.retry:
                     continue
                 else:
                     sys.exit('Error:  Exceeded maximum number of retries ({}) for post'
-                             ' - giving up.'.format(RETRY))
+                             ' - giving up.'.format(self.retry))
             else:
                 break
 
@@ -369,12 +369,16 @@ class AsaRestApi(object):
         # Note - this may be incomplete - better to move this to populate_ints and have it
         # dynamically discover all available interface types and interfaces
         resources = ['interfaces/physical', 'interfaces/vlan', 'routing/static']
-    
+
         for resource in resources:
             # Strip off leading part and slash:
             rc = resource[resource.find('/') + 1:]
-            resp = self.get(resource, verbose)
+            resp = self.get(resource, verbose=verbose)
             if resp:
+                if verbose:
+                    print('Processing {} from {}...'.format(resource, self.mgmt))
+                    print('View with object method print_ints or print_routes '
+                          'passing in {}.'.format(rc))
                 if resource == 'interfaces/physical':
                     self.populate_ints(resp, rc)
                 elif resource == 'interfaces/vlan':
