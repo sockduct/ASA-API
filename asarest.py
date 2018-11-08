@@ -186,17 +186,28 @@ class AsaRestApi(object):
                 print('Debug:  Asa.post:  Response status code is {}'.format(resp.status_code))
 
             # Get JSON data
-            resp_dict = resp.json()
+            if resp.content:
+                print('Debug:  resp={}'.format(resp.__dict__))
+                resp_dict = resp.json()
+            else:
+                resp_dict = None
 
             return resp_dict
         else:
             resp.raise_for_status()
 
     # Similar to get, no body and only status code back
-    def delete(self, resource):
+    def delete(self, resource, params=None, verbose=False, *args, **kwargs):
         '''ASA REST API - DELETE:  deletes specified object
            Requires user with privilege level 15'''
-        raise(NotImplementedError)
+
+        if params:
+            sys.exit("Error:  Don't know how to deal with parameters!"
+                     "\nReceived:  {}".format(params))
+
+        resp = requests.delete('https://' + self.mgmt + '/api/' + resource,
+                    auth=(self.user, self.passwd),
+                    timeout=self.timeout, verify=self.verify)
 
     # Similar to post - see if can combine
     def put(self, resource):

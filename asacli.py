@@ -3,6 +3,8 @@
 # Supported in Python v2.7 and 3.5+
 ###################################################################################################
 # To do:
+# * For normal operations, print status code
+#   * e.g., 200: <response...>
 # * Add support for Undocumented Java RESTful API used by ASDM (WIP)
 #   * Important because official REST API doesn't support CLI commands unless user privilege
 #     level is 15 (because commands sent to API using POST, POST requires level 15)

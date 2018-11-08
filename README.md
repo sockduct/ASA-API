@@ -62,17 +62,28 @@ rest-api agent
   * priv >= 3: invoke monitoring requests (/api/monitoring/*)
   * priv >= 5: invoke get requests
   * priv = 15: invoke put/post/patch?/delete requests
+* Notes:
+  * All usernames use the password "cisco"
+  * Usernames end with a number corresponding to their privilege level, e.g., cisco5 = user with privilege level 5
+  * Examples tested on Windows 10 x64 with PowerShell v5.1
+  * PowerShell prompt represented as:  `PS>`
+  * Response from ASA REST API represented as:  `<-- ASA REST Response: -->`
+  * Questions on other platforms/shells (e.g., Windows Legacy Command Prompt, Linux w/ bash, etc.) welcome - please open an issue or submit a PR
 * GET - Retrieve data from specified object (no request body)
   * Monitoring Example (priv >= 3):
-    * Get ASA Serial Number (https://<ASA>/api/monitoring/serialnumber):
+    * Get ASA Serial Number (https://*ASA*/api/monitoring/serialnumber):
       ```
-      asacli -i 198.51.100.164 -u cisco3 -pw cisco apires monitoring/serialnumber
+      PS> asacli -i 198.51.100.164 -u cisco3 -pw cisco apires monitoring/serialnumber
+      
+      <-- ASA REST Response: -->
       {'kind': 'object#QuerySerialNumber', 'serialNumber': '9ALHB4GTPD7'}
       ```
   * General Example (priv >= 5):
-    * Get configured NTP Servers (https://<ASA>/api/devicesetup/ntp/servers):
+    * Get configured NTP Servers (https://*ASA*/api/devicesetup/ntp/servers):
       ```
-      asacli -i 198.51.100.164 -u cisco5 -pw cisco apires devicesetup/ntp/servers
+      PS> asacli -i 198.51.100.164 -u cisco5 -pw cisco apires devicesetup/ntp/servers
+      
+      <-- ASA REST Response: -->
       {'items': [{'interface': {
                       'kind': 'objectRef#Interface',
                       'name': 'inside',
@@ -94,23 +105,31 @@ rest-api agent
   * General Example (priv = 15):
 * POST - Creates (new) object with supplied information
   * General Example 1 (priv = 15):
-    * Send command to ASA (https://<ASA>/api/cli, body={"commands": ["cmd1", "cmd2"]}
+    * Send command to ASA (https://*ASA*/api/cli, body={"commands": ["cmd1", "cmd2"]}
       ```
-      # In PowerShell - Note that PowerShell escape character is the backquote:
-      asacli -i 198.51.100.164 -u cisco -pw cisco apires -m post cli -b "`"{'commands': ['show firewall', 'show asdm image']}`""
+      # Note:  PowerShell escape character is the backquote (\`).
+      PS> asacli -i 198.51.100.164 -u cisco15 -pw cisco apires -m post cli -b "`"{'commands': ['show firewall', 'show asdm image']}`""
+      
+      <-- ASA REST Response: -->
       {'response': ['Firewall mode: Router\n',
                     'Device Manager image file, boot:/asdm-79247.bin\n']}
       ```
   * General Example 2 (priv = 15):
-    * Add NTP Server to ASA (https://<ASA>/api/devicesetup/ntp/servers, body={"interface": {"kind": "objectRef#Interface", "objectId": "GigabitEthernet0_API_SLASH_4"}, "isPreferred": false, "ipAddress": "3.3.3.3", "key": { "isTrusted": false, "number": "3", "value": "test3"}}
+    * Add NTP Server to ASA (https://*ASA*/api/devicesetup/ntp/servers, body={"interface": {"kind": "objectRef#Interface", "objectId": "GigabitEthernet0_API_SLASH_4"}, "isPreferred": false, "ipAddress": "3.3.3.3", "key": { "isTrusted": false, "number": "3", "value": "test3"}}
       ```
-       asacli -i 198.51.100.164 -u cisco -pw cisco apires -m post devicesetup/ntp/servers -b "`"{'interface': {'kind': 'objectRef#Interface', 'objectId': 'GigabitEthernet0_API_SLASH_2'}, 'isPreferred': false, 'ipAddress': '172.16.126.8'}`""
+       PS> asacli -i 198.51.100.164 -u cisco15 -pw cisco apires -m post devicesetup/ntp/servers -b "`"{'interface': {'kind': 'objectRef#Interface', 'objectId': 'GigabitEthernet0_API_SLASH_2'}, 'isPreferred': false, 'ipAddress': '172.16.126.8'}`""
+      
+      <-- ASA REST Response: -->
+      ?
       ```
 * DELETE - Removes specified object (no request body)
   * General Example (priv = 15):
-    * Remove NTP Server from ASA (https://<ASA>/api/devicesetup/ntp/servers/<NTP-Srv-IP>)
+    * Remove NTP Server from ASA (https://*ASA*/api/devicesetup/ntp/servers/<NTP-Srv-IP>)
       ```
-      asacli -i 198.51.100.164 -u cisco5 -pw cisco apires -m delete devicesetup/ntp/servers/172.16.126.8
+      PS> asacli -i 198.51.100.164 -u cisco15 -pw cisco apires -m delete devicesetup/ntp/servers/172.16.126.8
+      
+      <-- ASA REST Response: -->
+      ?
       ```
 * PATCH - Applies partial modifications to specified object
   * General Example (priv = 15):
