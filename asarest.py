@@ -192,17 +192,20 @@ class AsaRestApi(object):
         else:
             resp.raise_for_status()
 
+    # Similar to get, no body and only status code back
     def delete(self, resource):
         '''ASA REST API - DELETE:  deletes specified object
            Requires user with privilege level 15'''
         raise(NotImplementedError)
 
+    # Similar to post - see if can combine
     def put(self, resource):
         '''ASA REST API - PUT:  add supplied information to specified object
            Returns 404 (resource not found) error if object does not exist
            Requires user with privilege level 15'''
         raise(NotImplementedError)
 
+    # Similar to post - see if can combine
     def patch(self, resource):
         '''ASA REST API - PATCH:  applies partial modifications to specified object'''
         raise(NotImplementedError)

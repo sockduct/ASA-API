@@ -219,7 +219,9 @@ def apires(ctx, method, apiresource, params, body):
        Optionally include query parameter(s).'''
     asa = ctx.obj['asa']
     method = method.lower()
-    jbody = json.loads(body.replace("'", '"'))
+    if body:
+        orig_body = body
+        body = json.loads(body.replace("'", '"'))
     # Add extra args into JSON body:
     '''
     if len(ctx.args) >= 1:
@@ -234,9 +236,9 @@ def apires(ctx, method, apiresource, params, body):
         sys.exit('Error:  Supported methods are GET, POST, PUT, PATCH, DELETE.')
     else:
         ### Temp debug ###
-        print('-->Received:  method={}, apiresource={}, params={}, jbody={}, verbose={}'
+        print('-->Received:  method={}, apiresource={}, params={}, body={}, verbose={}'
               '<--'.format(method, apiresource, params, body, ctx.obj['debug']))
-        res = getattr(asa, method)(apiresource, payload=jbody, params=params, verbose=ctx.obj['debug'])
+        res = getattr(asa, method)(apiresource, payload=body, params=params, verbose=ctx.obj['debug'])
 
     # Nicely format JSON output
     fres = pprint.pformat(res)
