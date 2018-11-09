@@ -11,10 +11,10 @@
 * [ASA 5500-X Documentation, Release Notes](https://www.cisco.com/c/en/us/support/security/asa-5500-series-next-generation-firewalls/products-release-notes-list.html)
   * [ASA REST API Release Notes, v1.3.x](https://www.cisco.com/c/en/us/td/docs/security/asa/api/13/asa-api-rn-13.html)
 * ASA REST API Status Codes (standard HTTP):
-  * 200 OK - request completed successfully
-  * 201 Created - request completed successfully and object created
-  * 202 Accepted - request accepted, being processed (not finished)
-  * 204 No Content - request accepted, no content (e.g., query empty object?)
+  * 200 - OK, request completed successfully
+  * 201 - Created, request completed successfully and object created
+  * 202 - Accepted, request accepted, being processed (not finished)
+  * 204 - No Content, request accepted, no content (e.g., query empty object?)
   * 400 - Bad Request
   * 404 - Not Found
   * 405 - Method not Allowed
@@ -27,15 +27,18 @@ http server enable
 http <access-network> <netmask> <mgmt-nameif>
 ! access-network - the network from which you're accessing the ASA REST API
 ! mgmt-nameif - the logical name (nameif) of the interface you're connecting to
-! Note:  You cannot connect through the ASA - you must connect to the address of the interface you enter the firewall at.  In other words, if you're on the "inside" interface, you must connect to the "inside" interface IP and not for example to the "dmz" interface IP.
+! Note:  You cannot connect through the ASA - you must connect to the address of the interface
+!        you enter the firewall at.  In other words, if you're on the "inside" interface, you
+!        must connect to the "inside" interface IP and not for example to the "dmz" interface IP.
 !
+! Also possible to use external AAA Servers, but not shown here:
 aaa authentication http console LOCAL
 !
-username <user> password <password> privilege 15
+username <user> password <password> privilege <0-15>
 ! Note:
 !        priv >= 3: invoke monitoring requests
 !        priv >= 5: invoke get requests
-!        priv >= 15: invoke put/post/delete requests
+!        priv = 15: invoke put/post/delete requests
 !
 ! Note:  if aaa authorization enabled, REST agent requires user "enable_1" with priv 15 to exist - used by agent
 !
@@ -71,7 +74,8 @@ rest-api agent
   * Questions on other platforms/shells (e.g., Windows Legacy Command Prompt, Linux w/ bash, etc.) welcome - please open an issue or submit a PR
 * GET - Retrieve data from specified object (no request body)
   * Monitoring Example (priv >= 3):
-    * Get ASA Serial Number (https://*ASA*/api/monitoring/serialnumber):
+    * -------------- Does ASA show up below surrounded by brackets??? ----------------------
+    * Get ASA Serial Number (https://\<ASA\>/api/monitoring/serialnumber):
       ```
       PS> asacli -i 198.51.100.164 -u cisco3 -pw cisco apires monitoring/serialnumber
       
@@ -79,7 +83,7 @@ rest-api agent
       {'kind': 'object#QuerySerialNumber', 'serialNumber': '9ALHB4GTPD7'}
       ```
   * General Example (priv >= 5):
-    * Get configured NTP Servers (https://*ASA*/api/devicesetup/ntp/servers):
+    * Get configured NTP Servers (https://\<ASA\>/api/devicesetup/ntp/servers):
       ```
       PS> asacli -i 198.51.100.164 -u cisco5 -pw cisco apires devicesetup/ntp/servers
       
@@ -105,7 +109,7 @@ rest-api agent
   * General Example (priv = 15):
 * POST - Creates (new) object with supplied information
   * General Example 1 (priv = 15):
-    * Send command to ASA (https://*ASA*/api/cli, body={"commands": ["cmd1", "cmd2"]}
+    * Send command to ASA (https://\<ASA\>/api/cli, body={"commands": ["cmd1", "cmd2"]}
       ```
       # Note:  PowerShell escape character is the backquote (\`).
       PS> asacli -i 198.51.100.164 -u cisco15 -pw cisco apires -m post cli -b "`"{'commands': ['show firewall', 'show asdm image']}`""
@@ -115,7 +119,7 @@ rest-api agent
                     'Device Manager image file, boot:/asdm-79247.bin\n']}
       ```
   * General Example 2 (priv = 15):
-    * Add NTP Server to ASA (https://*ASA*/api/devicesetup/ntp/servers, body={"interface": {"kind": "objectRef#Interface", "objectId": "GigabitEthernet0_API_SLASH_4"}, "isPreferred": false, "ipAddress": "3.3.3.3", "key": { "isTrusted": false, "number": "3", "value": "test3"}}
+    * Add NTP Server to ASA (https://\<ASA\>/api/devicesetup/ntp/servers, body={"interface": {"kind": "objectRef#Interface", "objectId": "GigabitEthernet0_API_SLASH_4"}, "isPreferred": false, "ipAddress": "3.3.3.3", "key": { "isTrusted": false, "number": "3", "value": "test3"}}
       ```
        PS> asacli -i 198.51.100.164 -u cisco15 -pw cisco apires -m post devicesetup/ntp/servers -b "`"{'interface': {'kind': 'objectRef#Interface', 'objectId': 'GigabitEthernet0_API_SLASH_2'}, 'isPreferred': false, 'ipAddress': '172.16.126.8'}`""
       
@@ -124,7 +128,7 @@ rest-api agent
       ```
 * DELETE - Removes specified object (no request body)
   * General Example (priv = 15):
-    * Remove NTP Server from ASA (https://*ASA*/api/devicesetup/ntp/servers/<NTP-Srv-IP>)
+    * Remove NTP Server from ASA (https://\<ASA\>/api/devicesetup/ntp/servers/<NTP-Srv-IP>)
       ```
       PS> asacli -i 198.51.100.164 -u cisco15 -pw cisco apires -m delete devicesetup/ntp/servers/172.16.126.8
       

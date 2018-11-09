@@ -80,6 +80,9 @@ class AsaRestApi(object):
         # Note - ASA returns up to 100 records per query
         data_loc = 0  # Current range of data (i.e., 0-99)
         if params:
+            # This should probably be:
+            # get_payload = params
+            # get_payload['offset'] = 0
             get_payload.update({'offset': 0})
         else:
             get_payload = {'offset': 0}

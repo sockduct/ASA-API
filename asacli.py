@@ -119,7 +119,8 @@ def test():
     ## asa.show_ptrace(res)
 
 
-def replinst(provider='rest', interface='198.51.100.164', username='cisco', password='cisco', verbose=True):
+def replinst(provider='rest', interface='198.51.100.164', username='cisco', password='cisco',
+             verbose=True):
     '''Create an ASA instance for a REPL-like seession'''
     asa = Asa(provider='rest', mgmt=interface, user=username, passwd=password)
     asa.populate(verbose=verbose)
