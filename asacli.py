@@ -241,12 +241,16 @@ def apires(ctx, method, apiresource, params, body):
         ### Temp debug ###
         print('-->Received:  method={}, apiresource={}, params={}, body={}, verbose={}'
               '<--'.format(method, apiresource, params, body, ctx.obj['debug']))
-        res = getattr(asa, method)(apiresource, payload=body, params=params, verbose=ctx.obj['debug'])
+        code, resp = getattr(asa, method)(apiresource, payload=body, params=params, verbose=ctx.obj['debug'])
 
-    # Nicely format JSON output
-    fres = pprint.pformat(res)
-    # Use click to page through results
-    click.echo_via_pager(fres)
+    # Show response code
+    print('ASA Response Status Code:  {}'.format(code))
+
+    # Nicely format JSON output if we have a response
+    if resp:
+        fresp = pprint.pformat(resp)
+        # Use click to page through results
+        click.echo_via_pager(fresp)
 
 
 if __name__ == '__main__':

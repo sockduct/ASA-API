@@ -128,12 +128,12 @@ class AsaRestApi(object):
                     data_loc += 100
                     # We have everything
                     if data_loc >= resp_data['rangeInfo']['total']:
-                        return resp_data
+                        return resp.status_code, resp_data
                     # Don't have everything, get the next range
                     else:
                         get_payload['offset'] = data_loc
                 else:
-                    return resp_data
+                    return resp.status_code, resp_data
             elif resp.status_code == 400:
                 sys.exit('Error:  Asa.get:  ASA states request is bad (400).  Please '
                          'check the supplied arguments and make sure the API path is '
@@ -150,19 +150,27 @@ class AsaRestApi(object):
             else:
                 resp.raise_for_status()
 
-    def post(self, resource, payload, params=None, verbose=False):
+    # POST/PUT/PATCH
+    def post(self, resource, payload, params=None, verbose=False, **kwargs):
         '''ASA REST API - POST:  create object with supplied information
            Requires user with privilege level 15'''
         retries = 0
 
+        method = kwargs.get('method', 'post')
         while True:
             try:
                 if verbose:
-                    print('Attempting post connection to ASA as {}...'.format(self.user))
+                    print('Attempting {} connection to ASA as {}...'.format(method, self.user))
+                resp = getattr(requests, method)('https://' + self.mgmt + '/api/' + resource,
+                                     auth=(self.user, self.passwd),
+                                     timeout=self.timeout, verify=self.verify,
+                                     json=payload)
+                '''
                 resp = requests.post('https://' + self.mgmt + '/api/' + resource,
                                      auth=(self.user, self.passwd),
                                      timeout=self.timeout, verify=self.verify,
                                      json=payload)
+                '''
             except (ConnectTimeout, ReadTimeout) as err:
                 retries += 1
                 if verbose:
@@ -190,12 +198,13 @@ class AsaRestApi(object):
 
             # Get JSON data
             if resp.content:
-                print('Debug:  resp={}'.format(resp.__dict__))
+                if verbose:
+                    print('Debug:  resp={}'.format(resp.__dict__))
                 resp_dict = resp.json()
             else:
                 resp_dict = None
 
-            return resp_dict
+            return resp.status_code, resp_dict
         else:
             resp.raise_for_status()
 
@@ -212,17 +221,19 @@ class AsaRestApi(object):
                     auth=(self.user, self.passwd),
                     timeout=self.timeout, verify=self.verify)
 
+        return resp.status_code, None
+
     # Similar to post - see if can combine
-    def put(self, resource):
+    def put(self, *args, **kwargs):
         '''ASA REST API - PUT:  add supplied information to specified object
            Returns 404 (resource not found) error if object does not exist
            Requires user with privilege level 15'''
-        raise(NotImplementedError)
+        return self.post(*args, method='put', **kwargs)
 
     # Similar to post - see if can combine
-    def patch(self, resource):
+    def patch(self, *args, **kwargs):
         '''ASA REST API - PATCH:  applies partial modifications to specified object'''
-        raise(NotImplementedError)
+        return self.post(*args, method='patch', **kwargs)
 
     # Need to deal with errors - if get 400, output error instead of dying...
     def send_cmds(self, cmds, verbose=False):

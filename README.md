@@ -64,7 +64,7 @@ rest-api agent
   * priv <= 2: no access via REST API
   * priv >= 3: invoke monitoring requests (/api/monitoring/*)
   * priv >= 5: invoke get requests
-  * priv = 15: invoke put/post/patch?/delete requests
+  * priv = 15: invoke post/put/patch?/delete requests
 * Notes:
   * All usernames use the password "cisco"
   * Usernames end with a number corresponding to their privilege level, e.g., cisco5 = user with privilege level 5
@@ -74,12 +74,12 @@ rest-api agent
   * Questions on other platforms/shells (e.g., Windows Legacy Command Prompt, Linux w/ bash, etc.) welcome - please open an issue or submit a PR
 * GET - Retrieve data from specified object (no request body)
   * Monitoring Example (priv >= 3):
-    * -------------- Does ASA show up below surrounded by brackets??? ----------------------
     * Get ASA Serial Number (https://\<ASA\>/api/monitoring/serialnumber):
       ```
       PS> asacli -i 198.51.100.164 -u cisco3 -pw cisco apires monitoring/serialnumber
       
       <-- ASA REST Response: -->
+      ASA Response Status Code:  200
       {'kind': 'object#QuerySerialNumber', 'serialNumber': '9ALHB4GTPD7'}
       ```
   * General Example (priv >= 5):
@@ -88,53 +88,96 @@ rest-api agent
       PS> asacli -i 198.51.100.164 -u cisco5 -pw cisco apires devicesetup/ntp/servers
       
       <-- ASA REST Response: -->
-      {'items': [{'interface': {
-                      'kind': 'objectRef#Interface',
-                      'name': 'inside',
-                      'objectId': 'GigabitEthernet0_API_SLASH_2',
-                      'refLink': 'https://198.51.100.164/api/interfaces/physical/GigabitEthernet0_API_SLASH_2'
-                     },
-                  'ipAddress': '172.16.116.7',
+      ASA Response Status Code:  200
+      {'items': [{'interface': {'kind': 'objectRef#Interface',
+                                'name': 'outside',
+                                'objectId': 'GigabitEthernet0_API_SLASH_0',
+                                'refLink': 'https://198.51.100.164/api/interfaces/physical/GigabitEthernet0_API_SLASH_0'},
+                  'ipAddress': '203.0.113.33',
                   'isPreferred': True,
                   'kind': 'object#NTPServer',
-                  'objectId': '172.16.116.7',
-                  'selfLink': 'https://198.51.100.164/api/devicesetup/ntp/servers/172.16.116.7'
-                 }],
+                  'objectId': '203.0.113.33',
+                  'selfLink': 'https://198.51.100.164/api/devicesetup/ntp/servers/203.0.113.33'},
+                 {'ipAddress': '203.0.113.254',
+                  'isPreferred': False,
+                  'kind': 'object#NTPServer',
+                  'objectId': '203.0.113.254',
+                  'selfLink': 'https://198.51.100.164/api/devicesetup/ntp/servers/203.0.113.254'}],
        'kind': 'collection#NTPServer',
-       'rangeInfo': {'limit': 1, 'offset': 0, 'total': 1},
-       'selfLink': 'https://198.51.100.164/api/devicesetup/ntp/servers?offset=0'
-      }
+       'rangeInfo': {'limit': 2, 'offset': 0, 'total': 2},
+       'selfLink': 'https://198.51.100.164/api/devicesetup/ntp/servers?offset=0'}
       ```
-* PUT - Adds supplied information to specified object (update/replace/modify *existing* resource); If object doesn't exist, returns a 404 Resource Not Found error
-  * General Example (priv = 15):
+    * Get specific NTP Server (https://\<ASA\>/api/devicesetup/ntp/servers/\<Address\>):
+      ```
+      PS> asacli -i 198.51.100.164 -u cisco5 -pw cisco apires devicesetup/ntp/servers/203.0.113.254
+      
+      <-- ASA REST Response: -->
+      ASA Response Status Code:  200
+      {'ipAddress': '203.0.113.254',
+       'isPreferred': False,
+       'kind': 'object#NTPServer',
+       'objectId': '203.0.113.254',
+       'selfLink': 'https://198.51.100.164/api/devicesetup/ntp/servers/203.0.113.254'}    
+      ```
 * POST - Creates (new) object with supplied information
   * General Example 1 (priv = 15):
-    * Send command to ASA (https://\<ASA\>/api/cli, body={"commands": ["cmd1", "cmd2"]}
+    * Send command to ASA (https://\<ASA\>/api/cli<br>
+      Request Body:  {"commands": ["cmd1", "cmd2"]}
       ```
       # Note:  PowerShell escape character is the backquote (\`).
       PS> asacli -i 198.51.100.164 -u cisco15 -pw cisco apires -m post cli -b "`"{'commands': ['show firewall', 'show asdm image']}`""
       
       <-- ASA REST Response: -->
+      ASA Response Status Code:  200
       {'response': ['Firewall mode: Router\n',
                     'Device Manager image file, boot:/asdm-79247.bin\n']}
       ```
   * General Example 2 (priv = 15):
-    * Add NTP Server to ASA (https://\<ASA\>/api/devicesetup/ntp/servers, body={"interface": {"kind": "objectRef#Interface", "objectId": "GigabitEthernet0_API_SLASH_4"}, "isPreferred": false, "ipAddress": "3.3.3.3", "key": { "isTrusted": false, "number": "3", "value": "test3"}}
+    * Add NTP Server to ASA (https://\<ASA\>/api/devicesetup/ntp/servers<br>
+      Request Body:  { "interface": {
+                           "kind": "objectRef#Interface",
+                           "objectId": "GigabitEthernet0_API_SLASH_1"
+                       },
+                       "isPreferred": false,
+                       "ipAddress": "172.17.1.254" }
       ```
-       PS> asacli -i 198.51.100.164 -u cisco15 -pw cisco apires -m post devicesetup/ntp/servers -b "`"{'interface': {'kind': 'objectRef#Interface', 'objectId': 'GigabitEthernet0_API_SLASH_2'}, 'isPreferred': false, 'ipAddress': '172.16.126.8'}`""
+      PS> asacli -i 198.51.100.164 -u cisco15 -pw cisco apires -m post devicesetup/ntp/servers -b "`"{'interface': {'kind': 'objectRef#Interface', 'objectId': 'GigabitEthernet0_API_SLASH_1'}, 'isPreferred': false, 'ipAddress': '172.17.1.254'}`""
       
       <-- ASA REST Response: -->
-      ?
+      ASA Response Status Code:  201
+      ```
+* PUT - Adds supplied information to specified object (update/replace/modify *existing* resource); If object doesn't exist, returns a 404 Resource Not Found error
+  * General Example (priv = 15):
+    * Update NTP Server on ASA (https://\<ASA\>/api/devicesetup/ntp/servers/\<Address\><br>
+      Request Body:  { "interface": {
+                           "kind": "objectRef#Interface",
+                           "objectId": "GigabitEthernet0_API_SLASH_0"
+                       },
+                       "isPreferred": false,
+                       "ipAddress": "192.0.2.254"}
+      ```
+      PS> asacli -i 198.51.100.164 -u cisco15 -pw cisco apires -m put devicesetup/ntp/servers/172.17.1.254 -b "`"{'interface': {'kind': 'objectRef#Interface', 'objectId': 'GigabitEthernet0_API_SLASH_0'}, 'ipAddress': '192.0.2.254'}`""
+      
+      <-- ASA REST Response: -->
+      ASA Response Status Code:  204
+      ```
+* PATCH - Applies partial modifications to specified object
+  * General Example (priv = 15):
+    * Update NTP Server on ASA (https://\<ASA\>/api/devicesetup/ntp/servers/\<Address\><br>
+      Request Body:  {"ipAddress": "192.0.2.254"}
+      ```
+      PS> asacli -i 198.51.100.164 -u cisco15 -pw cisco apires -m patch devicesetup/ntp/servers/192.0.2.254 -b "`"{'ipAddress': '192.0.2.1'}`""
+      
+      <-- ASA REST Response: -->
+      ASA Response Status Code:  204
       ```
 * DELETE - Removes specified object (no request body)
   * General Example (priv = 15):
     * Remove NTP Server from ASA (https://\<ASA\>/api/devicesetup/ntp/servers/<NTP-Srv-IP>)
       ```
-      PS> asacli -i 198.51.100.164 -u cisco15 -pw cisco apires -m delete devicesetup/ntp/servers/172.16.126.8
+      PS> asacli -i 198.51.100.164 -u cisco15 -pw cisco apires -m delete devicesetup/ntp/servers/192.0.2.1
       
       <-- ASA REST Response: -->
-      ?
+      ASA Response Status Code:  204
       ```
-* PATCH - Applies partial modifications to specified object
-  * General Example (priv = 15):
  
